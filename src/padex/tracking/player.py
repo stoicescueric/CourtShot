@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import os
 from dataclasses import dataclass, field
 
 import cv2
@@ -123,6 +124,7 @@ class YoloPlayerDetectionStrategy(PlayerDetectionStrategy):
         confidence_threshold: float = 0.5,
         device: str | None = None,
         imgsz: int = 1280,
+        tracker: str | None = None,
     ) -> None:
         if model_path is None:
             from padex.weights import get_weight_path
@@ -132,6 +134,9 @@ class YoloPlayerDetectionStrategy(PlayerDetectionStrategy):
         self.confidence_threshold = confidence_threshold
         self.device = device
         self.imgsz = imgsz
+        # Tracker config (ultralytics yaml): argument, else $PADEX_TRACKER,
+        # else padex_bytetrack.yaml. padex_botsort.yaml adds appearance (ReID).
+        self.tracker = tracker or os.environ.get("PADEX_TRACKER", "padex_bytetrack.yaml")
         self._model = self._load_model()
 
     def _load_model(self):
@@ -157,10 +162,10 @@ class YoloPlayerDetectionStrategy(PlayerDetectionStrategy):
     ) -> list[RawDetection]:
         results = self._model.track(
             frame,
-            conf=self.confidence_threshold,
+            conf=0.1,
             classes=[self.PERSON_CLASS_ID],
             persist=True,
-            tracker="bytetrack.yaml",
+            tracker=self.tracker,
             verbose=False,
             device=self.device,
             imgsz=self.imgsz,
@@ -371,13 +376,20 @@ class YoloPoseEstimationStrategy(PoseEstimationStrategy):
         "right_ankle",
     ]
 
+    # Close-up pass for players the full-frame pass misses
+    CROP_PAD: float = 0.25        # margin around the player box, as a share of its size
+    CROP_IMGSZ: int = 384
+    CROP_CONFIDENCE: float = 0.1
+
     def __init__(
         self,
         model_path: str | None = None,
         confidence_threshold: float = 0.3,
         device: str | None = None,
         imgsz: int = 1280,
+        crop_fallback: bool = True,
     ) -> None:
+        self.crop_fallback = crop_fallback
         if model_path is None:
             from padex.weights import get_weight_path
 
@@ -412,56 +424,95 @@ class YoloPoseEstimationStrategy(PoseEstimationStrategy):
             imgsz=self.imgsz,
         )
 
-        if not results or results[0].keypoints is None:
-            return [[] for _ in bboxes]
+        result: list[list[PoseKeypoint]] = [[] for _ in bboxes]
 
-        # Parse all pose detections from YOLO-Pose
-        det_keypoints = results[0].keypoints
-        det_boxes = results[0].boxes
-        if det_boxes is None:
-            return [[] for _ in bboxes]
+        has_poses = (
+            bool(results)
+            and results[0].keypoints is not None
+            and results[0].keypoints.conf is not None
+            and results[0].boxes is not None
+            and len(results[0].boxes) > 0
+        )
+        if has_poses:
+            det_xyxy = results[0].boxes.xyxy.cpu().numpy()
+            kpts_xy = results[0].keypoints.xy.cpu().numpy()  # (N, 17, 2)
+            kpts_conf = results[0].keypoints.conf.cpu().numpy()  # (N, 17)
 
-        det_xyxy = det_boxes.xyxy.cpu().numpy()
-        kpts_xy = det_keypoints.xy.cpu().numpy()  # (N, 17, 2)
-        kpts_conf = det_keypoints.conf.cpu().numpy()  # (N, 17)
+            # Match input bboxes to YOLO-Pose detections via IoU + Hungarian
+            from scipy.optimize import linear_sum_assignment
 
-        # Match input bboxes to YOLO-Pose detections via IoU + Hungarian
-        from scipy.optimize import linear_sum_assignment
+            iou_matrix = self._compute_iou_matrix(bboxes, det_xyxy)
+            row_ind, col_ind = linear_sum_assignment(1.0 - iou_matrix)
+            for r, c in zip(row_ind, col_ind):
+                if iou_matrix[r, c] >= 0.3:
+                    result[r] = self._to_keypoints(kpts_xy[c], kpts_conf[c])
 
-        iou_matrix = self._compute_iou_matrix(bboxes, det_xyxy)
-        cost_matrix = 1.0 - iou_matrix
-        row_ind, col_ind = linear_sum_assignment(cost_matrix)
-
-        # Build match map: input bbox index → pose detection index
-        match_map: dict[int, int] = {}
-        for r, c in zip(row_ind, col_ind):
-            if iou_matrix[r, c] >= 0.3:
-                match_map[r] = c
-
-        result: list[list[PoseKeypoint]] = []
-        for i in range(len(bboxes)):
-            if i not in match_map:
-                result.append([])
-                continue
-
-            j = match_map[i]
-            kp_list: list[PoseKeypoint] = []
-            for k in range(len(self.COCO_KEYPOINT_NAMES)):
-                x_val = float(kpts_xy[j, k, 0])
-                y_val = float(kpts_xy[j, k, 1])
-                c_val = float(kpts_conf[j, k])
-                if c_val > 0.0:
-                    kp_list.append(
-                        PoseKeypoint(
-                            name=self.COCO_KEYPOINT_NAMES[k],
-                            x=x_val,
-                            y=y_val,
-                            confidence=c_val,
-                        )
-                    )
-            result.append(kp_list)
+        # Players the full-frame pass found no pose for (small, far side of
+        # the net, behind glass): look again at a close-up of just that player.
+        missing = [i for i, kps in enumerate(result) if not kps]
+        if missing and self.crop_fallback:
+            for i, kps in zip(missing, self._estimate_from_crops(frame, [bboxes[i] for i in missing])):
+                result[i] = kps
 
         return result
+
+    def _to_keypoints(
+        self, xy: np.ndarray, conf: np.ndarray, dx: float = 0.0, dy: float = 0.0
+    ) -> list[PoseKeypoint]:
+        return [
+            PoseKeypoint(
+                name=name,
+                x=float(xy[k, 0]) + dx,
+                y=float(xy[k, 1]) + dy,
+                confidence=float(conf[k]),
+            )
+            for k, name in enumerate(self.COCO_KEYPOINT_NAMES)
+            if float(conf[k]) > 0.0
+        ]
+
+    def _estimate_from_crops(
+        self, frame: np.ndarray, bboxes: list[BoundingBox]
+    ) -> list[list[PoseKeypoint]]:
+        """Pose for each bbox from a padded crop around it (one batched pass)."""
+        h_img, w_img = frame.shape[:2]
+        crops, origins = [], []
+        for b in bboxes:
+            pw, ph = self.CROP_PAD * (b.x2 - b.x1), self.CROP_PAD * (b.y2 - b.y1)
+            x1, y1 = int(max(0, b.x1 - pw)), int(max(0, b.y1 - ph))
+            x2, y2 = int(min(w_img, b.x2 + pw)), int(min(h_img, b.y2 + ph))
+            if x2 - x1 < 8 or y2 - y1 < 8:
+                crops.append(None)
+            else:
+                crops.append(frame[y1:y2, x1:x2])
+            origins.append((x1, y1))
+
+        out: list[list[PoseKeypoint]] = [[] for _ in bboxes]
+        valid = [i for i, c in enumerate(crops) if c is not None]
+        if not valid:
+            return out
+        results = self._model.predict(
+            [crops[i] for i in valid],
+            conf=self.CROP_CONFIDENCE,
+            verbose=False,
+            device=self.device,
+            imgsz=self.CROP_IMGSZ,
+        )
+        for i, res in zip(valid, results):
+            if (res.boxes is None or len(res.boxes) == 0
+                    or res.keypoints is None or res.keypoints.conf is None):
+                continue
+            x0, y0 = origins[i]
+            b = bboxes[i]
+            local = BoundingBox(x1=b.x1 - x0, y1=b.y1 - y0, x2=b.x2 - x0, y2=b.y2 - y0)
+            ious = self._compute_iou_matrix([local], res.boxes.xyxy.cpu().numpy())[0]
+            j = int(np.argmax(ious))
+            if ious[j] >= 0.3:
+                out[i] = self._to_keypoints(
+                    res.keypoints.xy[j].cpu().numpy(),
+                    res.keypoints.conf[j].cpu().numpy(),
+                    dx=x0, dy=y0,
+                )
+        return out
 
     @staticmethod
     def _compute_iou_matrix(

@@ -124,6 +124,15 @@ class TrackingPipeline:
                 else:
                     logger.warning("Court calibration failed — positions will be None")
 
+            # A fixed camera has a stable background: give the ball model the
+            # median of frames spread over the video instead of letting it use
+            # the first frame (which has players and maybe the ball in it).
+            set_bg = getattr(self.ball_detector.detection_strategy, "set_background", None)
+            if set_bg is not None:
+                background = self._median_background(reader, start_frame, end_frame)
+                if background is not None:
+                    set_bg(background)
+
             # Set homography for ball tracker before the loop
             if H is not None:
                 self.ball_detector.tracker.set_homography(H)
@@ -139,11 +148,13 @@ class TrackingPipeline:
                 )
                 player_frames.extend(pf_list)
 
-                # Ball detection + tracking (streaming, no buffering)
-                bf = self.ball_detector.detect_and_track_single(
-                    frame, frame_id, timestamp_ms
+                # Ball detection + tracking (streaming; results arrive a few
+                # frames late when the detector smooths over time)
+                ball_frames.extend(
+                    self.ball_detector.detect_and_track_smoothed(
+                        frame, frame_id, timestamp_ms
+                    )
                 )
-                ball_frames.append(bf)
 
                 processed += 1
                 if processed % 500 == 0:
@@ -154,6 +165,8 @@ class TrackingPipeline:
                         100.0 * processed / total_frames,
                     )
 
+            ball_frames.extend(self.ball_detector.flush())
+
         logger.info("Tracking complete: %d frames processed", processed)
 
         return TrackingResult(
@@ -161,6 +174,20 @@ class TrackingPipeline:
             ball_frames=ball_frames,
             calibration=calibration,
         )
+
+    @staticmethod
+    def _median_background(
+        reader, start_frame: int = 0, end_frame: int | None = None, samples: int = 30
+    ) -> np.ndarray | None:
+        """Per-pixel median of frames spread evenly over the processed span."""
+        end = end_frame or reader.frame_count
+        if end - start_frame < samples:
+            return None
+        picks = np.linspace(start_frame, end - 1, samples).astype(int)
+        frames = [f for f in (reader.read_frame(int(i)) for i in picks) if f is not None]
+        if len(frames) < samples // 2:
+            return None
+        return np.median(np.stack(frames), axis=0).astype(np.uint8)
 
     def _calibrate_court(self, reader) -> CourtCalibration | None:
         """Find the best court calibration from sampled frames."""

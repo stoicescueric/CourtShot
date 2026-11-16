@@ -78,6 +78,12 @@ class BallFrame(BaseModel):
     position: Position3D | None = None
     confidence: float = Field(0.0, ge=0, le=1)
     visibility: BallVisibility = BallVisibility.VISIBLE
+    candidates: list[tuple[float, float, float]] = Field(
+        default_factory=list,
+        description="All ball-like detections in this frame as (x, y, confidence) "
+        "in pixels, the one in bbox first. Lets trajectory linking recover the "
+        "real ball when the top detection is a reflection or a spare ball.",
+    )
 
 
 class CourtCalibration(BaseModel):

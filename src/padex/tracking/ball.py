@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import abc
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
@@ -46,6 +46,9 @@ class RawBallDetection:
     confidence: float
     frame_id: int
     timestamp_ms: float
+    # Every ball-like blob in this frame as (x, y, confidence) in pixels,
+    # the one in `bbox` first. Empty for detectors that return one result.
+    candidates: list[tuple[float, float, float]] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +474,7 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
     INFER_H: int = 288
     HEATMAP_THRESHOLD: float = 0.5  # sigmoid output in [0, 1]
     MAX_BLOB_AREA: int = 200
+    MAX_CANDIDATES: int = 3  # blobs kept per frame (the ball plus look-alikes)
     SEQ_LEN: int = 8  # number of target frames (checkpoint param_dict: seq_len=8)
     # bg_mode='concat': input = [bg_frame, frame_1, ..., frame_8] = 9 frames = 27 channels
 
@@ -487,7 +491,13 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
         self._device_str = device
         self._model = None
         self._frame_buffer: list[np.ndarray] = []  # stores up to SEQ_LEN+1 frames
-        self._bg_frame: np.ndarray | None = None   # background = first seen frame
+        # Background: set_background() if called, else the first seen frame
+        self._bg_frame: np.ndarray | None = None
+        self._bg_source: np.ndarray | None = None
+        # detect_smoothed(): model outputs of the last SEQ_LEN windows, and
+        # the (frame_id, timestamp_ms, shape) of frames not yet returned
+        self._windows: list[np.ndarray] = []
+        self._pending: list[tuple[int, float, tuple]] = []
 
     def _ensure_model(self) -> None:
         if self._model is not None:
@@ -500,6 +510,12 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
         # in_dim=27: (SEQ_LEN+1)*3 channels; out_dim=SEQ_LEN: one heatmap per target frame
         model = _build_tracknet_v3(in_dim=(self.SEQ_LEN + 1) * 3, out_dim=self.SEQ_LEN)
         state = torch.load(self.model_path, map_location="cpu", weights_only=False)
+        # A checkpoint trained at another resolution says so (train_tracknetv3.py --size)
+        if isinstance(state, dict) and "infer_size" in state:
+            cls = type(self)
+            self.INFER_W, self.INFER_H = (int(v) for v in state["infer_size"])
+            scale = (self.INFER_W * self.INFER_H) / (cls.INFER_W * cls.INFER_H)
+            self.MAX_BLOB_AREA = int(round(cls.MAX_BLOB_AREA * scale))
         # Support both raw state_dict and wrapped checkpoints
         if isinstance(state, dict) and "model" in state:
             state = state["model"]
@@ -511,7 +527,7 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
         model.eval()
         model.to(self._torch_device)
         self._model = model
-        logger.info("TrackNet V3 loaded on %s", device)
+        logger.info("TrackNet V3 loaded on %s (%dx%d)", device, self.INFER_W, self.INFER_H)
 
     @staticmethod
     def _auto_device() -> str:
@@ -526,17 +542,34 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
             pass
         return "cpu"
 
-    def detect(
-        self, frame: np.ndarray, frame_id: int, timestamp_ms: float
-    ) -> RawBallDetection | None:
+    def set_background(self, frame: np.ndarray | None) -> None:
+        """Use this frame (e.g. the median of the video) as the background.
+
+        It is kept across reset(). Pass None to go back to the first seen frame.
+        """
+        self._bg_source = frame
+        self._bg_frame = None
+
+    def _forward(self, frame: np.ndarray) -> np.ndarray | None:
+        """Push one frame; heatmaps (SEQ_LEN, H, W) for the last SEQ_LEN frames,
+        or None until SEQ_LEN frames have been seen."""
         self._ensure_model()
         import torch
 
-        resized = cv2.resize(frame, (self.INFER_W, self.INFER_H))
+        # INTER_AREA: the same downscaling the training frames were made with
+        resized = cv2.resize(
+            frame, (self.INFER_W, self.INFER_H), interpolation=cv2.INTER_AREA
+        )
 
-        # Store first frame as static background approximation
+        # Background: the one from set_background(), else the first frame
         if self._bg_frame is None:
-            self._bg_frame = resized
+            if self._bg_source is not None:
+                self._bg_frame = cv2.resize(
+                    self._bg_source, (self.INFER_W, self.INFER_H),
+                    interpolation=cv2.INTER_AREA,
+                )
+            else:
+                self._bg_frame = resized
 
         self._frame_buffer.append(resized)
         if len(self._frame_buffer) > self.SEQ_LEN:
@@ -554,15 +587,15 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
 
         with torch.no_grad():
             out = self._model(tensor)  # (1, SEQ_LEN, 288, 512)
+        return out[0].cpu().numpy()
 
-        # Last channel = current (newest) frame heatmap
-        heatmap = out[0, -1].cpu().numpy()  # (288, 512), values in [0, 1]
-
-        x_pred, y_pred, confidence = self._postprocess(heatmap, frame.shape)
-        if x_pred is None:
+    def _to_detection(
+        self, heatmap: np.ndarray, orig_shape: tuple, frame_id: int, timestamp_ms: float
+    ) -> RawBallDetection | None:
+        candidates = self._candidates(heatmap, orig_shape)
+        if not candidates:
             return None
-
-        h_orig, w_orig = frame.shape[:2]
+        x_pred, y_pred, confidence = candidates[0]
         r = 4
         return RawBallDetection(
             bbox=BoundingBox(
@@ -572,44 +605,103 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
             confidence=float(confidence),
             frame_id=frame_id,
             timestamp_ms=timestamp_ms,
+            candidates=candidates,
         )
 
-    def _postprocess(
+    def detect(
+        self, frame: np.ndarray, frame_id: int, timestamp_ms: float
+    ) -> RawBallDetection | None:
+        """Detection for this frame from the newest window only (no delay)."""
+        heatmaps = self._forward(frame)
+        if heatmaps is None:
+            return None
+        # Last channel = current (newest) frame heatmap
+        return self._to_detection(heatmaps[-1], frame.shape, frame_id, timestamp_ms)
+
+    def detect_smoothed(
+        self, frame: np.ndarray, frame_id: int, timestamp_ms: float
+    ) -> list[tuple[int, float, RawBallDetection | None]]:
+        """Like detect(), but each frame's heatmap is the average over every
+        window that contains it (up to SEQ_LEN of them), so the model has seen
+        the frames after it as well as those before.
+
+        Results therefore come SEQ_LEN - 1 frames late: each call returns the
+        frames that are now final, as (frame_id, timestamp_ms, detection), in
+        order. Call flush_smoothed() after the last frame for the rest. Don't
+        mix with detect() on the same stream.
+        """
+        self._pending.append((frame_id, timestamp_ms, frame.shape))
+        heatmaps = self._forward(frame)
+        if heatmaps is None:
+            return []
+        self._windows.append(heatmaps)
+        if len(self._windows) > self.SEQ_LEN:
+            self._windows.pop(0)
+        return [self._finish_oldest(0)]
+
+    def flush_smoothed(self) -> list[tuple[int, float, RawBallDetection | None]]:
+        """The frames still waiting for later windows that will never come."""
+        out = []
+        k = 1  # position of the oldest pending frame in the newest window
+        while self._pending:
+            if self._windows and k < self.SEQ_LEN:
+                out.append(self._finish_oldest(k))
+            else:  # fewer than SEQ_LEN frames were ever seen
+                fid, ts, _ = self._pending.pop(0)
+                out.append((fid, ts, None))
+            k += 1
+        self._windows.clear()
+        return out
+
+    def _finish_oldest(self, k: int) -> tuple[int, float, RawBallDetection | None]:
+        """Average the heatmaps of the frame at position k of the newest
+        window: it is at position k + j of the window j steps older."""
+        fid, ts, shape = self._pending.pop(0)
+        maps = [
+            self._windows[-1 - j][k + j]
+            for j in range(len(self._windows))
+            if k + j < self.SEQ_LEN
+        ]
+        return fid, ts, self._to_detection(np.mean(maps, axis=0), shape, fid, ts)
+
+    def _candidates(
         self,
         heatmap: np.ndarray,
         orig_shape: tuple,
-    ) -> tuple[float | None, float | None, float]:
-        """Extract ball center from sigmoid heatmap. Returns (x, y, conf) in original pixels."""
+    ) -> list[tuple[float, float, float]]:
+        """Ball-sized blobs of the heatmap as (x, y, conf) in original pixels,
+        largest first, at most MAX_CANDIDATES.
+
+        The first one is the detection Padex reports. The others are kept
+        because the largest blob is sometimes a reflection or a spare ball
+        while the real ball is a smaller blob in the same frame; trajectory
+        linking downstream can then pick the one that continues the track.
+        """
+        if heatmap.max() < self.HEATMAP_THRESHOLD:
+            return []
         h_orig, w_orig = orig_shape[:2]
         scale_x = w_orig / self.INFER_W
         scale_y = h_orig / self.INFER_H
 
-        if heatmap.max() < self.HEATMAP_THRESHOLD:
-            return None, None, 0.0
-
-        binary = (heatmap >= self.HEATMAP_THRESHOLD).astype(np.uint8) * 255
+        binary = (heatmap >= self.HEATMAP_THRESHOLD).astype(np.uint8)
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
             binary, connectivity=8
         )
-
-        if num_labels <= 1:
-            return None, None, 0.0
-
-        fg_areas = stats[1:, cv2.CC_STAT_AREA]
-        best_label = int(np.argmax(fg_areas)) + 1
-
-        if fg_areas[best_label - 1] > self.MAX_BLOB_AREA:
-            return None, None, 0.0
-
-        cx, cy = centroids[best_label]
-        blob_mask = labels == best_label
-        confidence = float(heatmap[blob_mask].max())
-
-        return float(cx * scale_x), float(cy * scale_y), confidence
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        order = [int(k) + 1 for k in np.argsort(-areas, kind="stable")
+                 if areas[k] <= self.MAX_BLOB_AREA]
+        out: list[tuple[float, float, float]] = []
+        for label in order[: self.MAX_CANDIDATES]:
+            cx, cy = centroids[label]
+            conf = float(heatmap[labels == label].max())
+            out.append((float(cx * scale_x), float(cy * scale_y), conf))
+        return out
 
     def reset(self) -> None:
         self._frame_buffer.clear()
         self._bg_frame = None
+        self._windows.clear()
+        self._pending.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -890,6 +982,7 @@ class BallDetector:
             position=None,
             confidence=raw.confidence if raw else 0.0,
             visibility=BallVisibility.VISIBLE if raw else BallVisibility.OCCLUDED,
+            candidates=raw.candidates if raw else [],
         )
 
     def detect_and_track_single(
@@ -911,6 +1004,45 @@ class BallDetector:
             position=position,
             confidence=raw.confidence if raw else 0.0,
             visibility=visibility,
+            candidates=raw.candidates if raw else [],
+        )
+
+    def detect_and_track_smoothed(
+        self,
+        frame: np.ndarray,
+        frame_id: int,
+        timestamp_ms: float,
+    ) -> list[BallFrame]:
+        """Streaming mode with temporal smoothing where the detector has it
+        (TrackNet V3 averages overlapping windows, which is more accurate
+        than its newest-frame output).
+
+        Returns the frames that are final after this call: none or one, a few
+        frames behind the input. Call flush() after the last frame. Detectors
+        without smoothing return this frame's result straight away.
+        """
+        smoothed = getattr(self.detection_strategy, "detect_smoothed", None)
+        if smoothed is None:
+            return [self.detect_and_track_single(frame, frame_id, timestamp_ms)]
+        return [self._tracked(fid, ts, raw) for fid, ts, raw in smoothed(frame, frame_id, timestamp_ms)]
+
+    def flush(self) -> list[BallFrame]:
+        """Remaining frames of detect_and_track_smoothed() at the end of the video."""
+        flush = getattr(self.detection_strategy, "flush_smoothed", None)
+        return [self._tracked(fid, ts, raw) for fid, ts, raw in flush()] if flush else []
+
+    def _tracked(
+        self, frame_id: int, timestamp_ms: float, raw: RawBallDetection | None
+    ) -> BallFrame:
+        position, visibility = self.tracker.update(raw, timestamp_ms)
+        return BallFrame(
+            frame_id=frame_id,
+            timestamp_ms=timestamp_ms,
+            bbox=raw.bbox if raw else None,
+            position=position,
+            confidence=raw.confidence if raw else 0.0,
+            visibility=visibility,
+            candidates=raw.candidates if raw else [],
         )
 
     def track(
@@ -943,6 +1075,7 @@ class BallDetector:
                     position=position,
                     confidence=raw.confidence if raw else 0.0,
                     visibility=visibility,
+                    candidates=raw.candidates if raw else [],
                 )
             )
 
