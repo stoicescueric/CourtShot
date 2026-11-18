@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from padex.tracking.device import use_half_precision
 from padex.schemas.tracking import (
     BallFrame,
     BallVisibility,
@@ -490,7 +491,8 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
         self.model_path = model_path
         self._device_str = device
         self._model = None
-        self._frame_buffer: list[np.ndarray] = []  # stores up to SEQ_LEN+1 frames
+        self._frame_buffer: list = []  # last SEQ_LEN frames, as tensors on the device
+        self._bg_tensor = None
         # Background: set_background() if called, else the first seen frame
         self._bg_frame: np.ndarray | None = None
         self._bg_source: np.ndarray | None = None
@@ -506,6 +508,7 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
 
         device = self._device_str or self._auto_device()
         self._torch_device = torch.device(device)
+        self._half = use_half_precision(device)
 
         # in_dim=27: (SEQ_LEN+1)*3 channels; out_dim=SEQ_LEN: one heatmap per target frame
         model = _build_tracknet_v3(in_dim=(self.SEQ_LEN + 1) * 3, out_dim=self.SEQ_LEN)
@@ -549,6 +552,7 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
         """
         self._bg_source = frame
         self._bg_frame = None
+        self._bg_tensor = None
 
     def _forward(self, frame: np.ndarray) -> np.ndarray | None:
         """Push one frame; heatmaps (SEQ_LEN, H, W) for the last SEQ_LEN frames,
@@ -571,7 +575,11 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
             else:
                 self._bg_frame = resized
 
-        self._frame_buffer.append(resized)
+        # Frames are kept on the device as float tensors, so each one is
+        # converted and uploaded once instead of once per window it is in.
+        if self._bg_tensor is None:
+            self._bg_tensor = self._to_tensor(self._bg_frame)
+        self._frame_buffer.append(self._to_tensor(resized))
         if len(self._frame_buffer) > self.SEQ_LEN:
             self._frame_buffer.pop(0)
 
@@ -580,14 +588,18 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
             return None
 
         # Input: [bg_frame, frame_1, ..., frame_SEQ_LEN] stacked as 27 channels
-        all_frames = [self._bg_frame] + self._frame_buffer
-        imgs = np.concatenate(all_frames, axis=2).astype(np.float32) / 255.0
-        tensor = torch.from_numpy(imgs.transpose(2, 0, 1)).unsqueeze(0)
-        tensor = tensor.to(self._torch_device)
+        tensor = torch.cat([self._bg_tensor] + self._frame_buffer, dim=0).unsqueeze(0)
 
-        with torch.no_grad():
+        with torch.inference_mode(), torch.autocast("cuda", enabled=self._half):
             out = self._model(tensor)  # (1, SEQ_LEN, 288, 512)
-        return out[0].cpu().numpy()
+        return out[0].float().cpu().numpy()
+
+    def _to_tensor(self, img: np.ndarray) -> "torch.Tensor":
+        """HxWx3 uint8 image -> (3, H, W) float tensor in 0..1 on the device."""
+        import torch
+
+        t = torch.from_numpy(np.ascontiguousarray(img.transpose(2, 0, 1)))
+        return t.to(self._torch_device).float() / 255.0
 
     def _to_detection(
         self, heatmap: np.ndarray, orig_shape: tuple, frame_id: int, timestamp_ms: float
@@ -700,6 +712,7 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
     def reset(self) -> None:
         self._frame_buffer.clear()
         self._bg_frame = None
+        self._bg_tensor = None
         self._windows.clear()
         self._pending.clear()
 

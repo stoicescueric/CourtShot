@@ -32,6 +32,7 @@ All thresholds scale with the frame height, so they mean the same at 720p and
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 
 import cv2
@@ -41,7 +42,8 @@ import numpy as np
 @dataclass
 class BallSettings:
     static_px: float = 0.006      # cell size for static-blob check, fraction of frame height
-    static_s: float = 2.0         # a cell occupied this long in total = static object
+    static_s: float = 2.0         # a cell occupied this long within the window = static object
+    static_window_s: float = 30.0  # ...counting only detections this close in time (before or after)
     gate: float = 0.045           # linking gate per frame, fraction of frame height
     max_gap: int = 6              # frames a tracklet can go without a detection
     min_tracklet: int = 6         # shorter tracklets are treated as noise
@@ -153,13 +155,23 @@ def drop_static(det: dict[int, list[tuple[float, float]]], frame_h: float, fps: 
     def key(p):
         return int(p[0] // cell), int(p[1] // cell)
 
-    counts: dict[tuple[int, int], int] = {}
-    for ps in det.values():
+    # Frames in which each cell (or a neighbour) held a detection, in order.
+    seen: dict[tuple[int, int], list[int]] = {}
+    for f in sorted(det):
         # a frame counts once per cell, however many candidates fall in it
-        for k in {(kx + dx, ky + dy) for kx, ky in map(key, ps) for dx in (-1, 0, 1) for dy in (-1, 0, 1)}:
-            counts[k] = counts.get(k, 0) + 1
+        for k in {(kx + dx, ky + dy) for kx, ky in map(key, det[f]) for dx in (-1, 0, 1) for dy in (-1, 0, 1)}:
+            seen.setdefault(k, []).append(f)
     limit = s.static_s * fps
-    out = {f: [p for p in ps if counts[key(p)] < limit] for f, ps in det.items()}
+    window = s.static_window_s * fps
+
+    # Occupancy is counted near each detection in time, not over the whole
+    # video: in a full match the real ball passes through the same spots
+    # often enough to add up to static_s, and would be thrown away.
+    def static(f: int, p) -> bool:
+        frames = seen[key(p)]
+        return bisect_right(frames, f + window) - bisect_left(frames, f - window) >= limit
+
+    out = {f: [p for p in ps if not static(f, p)] for f, ps in det.items()}
     return {f: ps for f, ps in out.items() if ps}
 
 

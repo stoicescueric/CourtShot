@@ -14,11 +14,13 @@ from __future__ import annotations
 import abc
 import logging
 import os
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
 
+from padex.tracking.device import use_half_precision, use_pose_closeups_only, use_threads
 from padex.schemas.tracking import BoundingBox, PlayerFrame, PoseKeypoint, Position2D
 
 logger = logging.getLogger(__name__)
@@ -133,6 +135,7 @@ class YoloPlayerDetectionStrategy(PlayerDetectionStrategy):
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
         self.device = device
+        self.half = use_half_precision(device)
         self.imgsz = imgsz
         # Tracker config (ultralytics yaml): argument, else $PADEX_TRACKER,
         # else padex_bytetrack.yaml. padex_botsort.yaml adds appearance (ReID).
@@ -153,6 +156,7 @@ class YoloPlayerDetectionStrategy(PlayerDetectionStrategy):
             classes=[self.PERSON_CLASS_ID],
             verbose=False,
             device=self.device,
+            half=self.half,
             imgsz=self.imgsz,
         )
         return self._parse_results(results, frame)
@@ -168,6 +172,7 @@ class YoloPlayerDetectionStrategy(PlayerDetectionStrategy):
             tracker=self.tracker,
             verbose=False,
             device=self.device,
+            half=self.half,
             imgsz=self.imgsz,
         )
         return self._parse_results(results, frame, with_tracking=True)
@@ -397,6 +402,7 @@ class YoloPoseEstimationStrategy(PoseEstimationStrategy):
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
         self.device = device
+        self.half = use_half_precision(device)
         self.imgsz = imgsz
         self._model = None
 
@@ -406,14 +412,15 @@ class YoloPoseEstimationStrategy(PoseEstimationStrategy):
 
             self._model = YOLO(self.model_path)
 
-    def estimate(
-        self,
-        frame: np.ndarray,
-        bboxes: list[BoundingBox],
-    ) -> list[list[PoseKeypoint]]:
-        if not bboxes:
-            return []
+    def predict_full_frame(
+        self, frame: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        """Full-frame pose pass: (boxes xyxy, keypoints xy, keypoint conf) of
+        everyone found, or None if nobody was.
 
+        It does not need the player boxes, so it can run at the same time as
+        player detection; hand the result to estimate() as ``full_frame``.
+        """
         self._ensure_model()
 
         results = self._model.predict(
@@ -421,10 +428,9 @@ class YoloPoseEstimationStrategy(PoseEstimationStrategy):
             conf=self.confidence_threshold,
             verbose=False,
             device=self.device,
+            half=self.half,
             imgsz=self.imgsz,
         )
-
-        result: list[list[PoseKeypoint]] = [[] for _ in bboxes]
 
         has_poses = (
             bool(results)
@@ -433,10 +439,36 @@ class YoloPoseEstimationStrategy(PoseEstimationStrategy):
             and results[0].boxes is not None
             and len(results[0].boxes) > 0
         )
-        if has_poses:
-            det_xyxy = results[0].boxes.xyxy.cpu().numpy()
-            kpts_xy = results[0].keypoints.xy.cpu().numpy()  # (N, 17, 2)
-            kpts_conf = results[0].keypoints.conf.cpu().numpy()  # (N, 17)
+        if not has_poses:
+            return None
+        return (
+            results[0].boxes.xyxy.cpu().numpy(),
+            results[0].keypoints.xy.cpu().numpy(),  # (N, 17, 2)
+            results[0].keypoints.conf.cpu().numpy(),  # (N, 17)
+        )
+
+    _NOT_RUN = object()
+
+    def estimate(
+        self,
+        frame: np.ndarray,
+        bboxes: list[BoundingBox],
+        full_frame=_NOT_RUN,
+    ) -> list[list[PoseKeypoint]]:
+        """Pose per bbox. ``full_frame`` is the result of predict_full_frame()
+        for this frame if it was already run; otherwise it is run here."""
+        if not bboxes:
+            return []
+
+        self._ensure_model()
+
+        if full_frame is self._NOT_RUN:
+            full_frame = self.predict_full_frame(frame)
+
+        result: list[list[PoseKeypoint]] = [[] for _ in bboxes]
+
+        if full_frame is not None:
+            det_xyxy, kpts_xy, kpts_conf = full_frame
 
             # Match input bboxes to YOLO-Pose detections via IoU + Hungarian
             from scipy.optimize import linear_sum_assignment
@@ -495,6 +527,7 @@ class YoloPoseEstimationStrategy(PoseEstimationStrategy):
             conf=self.CROP_CONFIDENCE,
             verbose=False,
             device=self.device,
+            half=self.half,
             imgsz=self.CROP_IMGSZ,
         )
         for i, res in zip(valid, results):
@@ -560,13 +593,30 @@ class PlayerDetector:
         pose_strategy: PoseEstimationStrategy | None = None,
         model_path: str = "assets/weights/yolo26m.pt",
         confidence_threshold: float = 0.5,
+        max_players: int | None = None,
+        pose_closeups_only: bool | None = None,
     ) -> None:
+        # How many in-court detections to keep per frame (most confident
+        # first). 4 suits a consumer that takes them as the players; give
+        # stable_ids more to choose from, so that an umpire or a reflection
+        # scoring higher than a far player doesn't push that player out.
+        if max_players is not None:
+            self.MAX_PLAYERS = max_players
+        # Pose from close-ups of the players only, skipping the full-frame
+        # pose pass (PADEX_POSE_CLOSEUPS=1): faster, slightly worse poses for
+        # the near players. Needs a pose strategy with a close-up fallback.
+        self.pose_closeups_only = (
+            use_pose_closeups_only() if pose_closeups_only is None else pose_closeups_only
+        )
         self.detection_strategy = detection_strategy or YoloPlayerDetectionStrategy(
             model_path=model_path,
             confidence_threshold=confidence_threshold,
         )
         self.team_classifier = team_classifier or JerseyColorTeamClassifier()
         self.pose_strategy = pose_strategy
+        # Run the full-frame pose pass alongside detection (PADEX_THREADS=0: off)
+        self.parallel_pose = use_threads()
+        self._pose_pool: ThreadPoolExecutor | None = None
         self._pose_smooth_alpha = 0.6
         self._pose_buffer: dict[str, dict[str, tuple[float, float, float]]] = {}
 
@@ -591,11 +641,30 @@ class PlayerDetector:
         homography_matrix: np.ndarray | None = None,
     ) -> list[PlayerFrame]:
         """Detect + track players across frames with ByteTrack."""
-        raw = self.detection_strategy.detect_with_tracking(
-            frame, frame_id, timestamp_ms
-        )
+        # The full-frame pose pass does not depend on the detections, so it
+        # runs on a worker thread while the main thread detects and tracks.
+        pose_future = None
+        predict_pose = getattr(self.pose_strategy, "predict_full_frame", None)
+        if self.pose_closeups_only:
+            predict_pose = None
+        if predict_pose is not None and self.parallel_pose:
+            if self._pose_pool is None:
+                self._pose_pool = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="padex-pose"
+                )
+            pose_future = self._pose_pool.submit(predict_pose, frame)
+
+        try:
+            raw = self.detection_strategy.detect_with_tracking(
+                frame, frame_id, timestamp_ms
+            )
+        except BaseException:
+            if pose_future is not None:
+                pose_future.exception()  # wait: never leave the worker running
+            raise
         return self._build_player_frames(
-            raw, frame, frame_id, timestamp_ms, homography_matrix
+            raw, frame, frame_id, timestamp_ms, homography_matrix, pose_future,
+            skip_full_frame_pose=self.pose_closeups_only,
         )
 
     def reset_tracking(self) -> None:
@@ -615,8 +684,18 @@ class PlayerDetector:
         frame_id: int,
         timestamp_ms: float,
         homography_matrix: np.ndarray | None,
+        pose_future: Future | None = None,
+        skip_full_frame_pose: bool = False,
     ) -> list[PlayerFrame]:
         """Convert raw detections into filtered, enriched PlayerFrames."""
+        # Always collect the worker's result, so its errors surface here and
+        # it never overlaps with the next frame.
+        pose_kwargs = {}
+        if pose_future is not None:
+            pose_kwargs["full_frame"] = pose_future.result()
+        elif skip_full_frame_pose:
+            pose_kwargs["full_frame"] = None  # every player goes to the close-up pass
+
         if not raw_detections:
             return []
 
@@ -645,7 +724,7 @@ class PlayerDetector:
         pose_results: list[list[PoseKeypoint]] | None = None
         if self.pose_strategy is not None:
             bboxes = [det.bbox for det, _ in positioned]
-            pose_results = self.pose_strategy.estimate(frame, bboxes)
+            pose_results = self.pose_strategy.estimate(frame, bboxes, **pose_kwargs)
 
         # 5. Build PlayerFrame objects
         player_frames: list[PlayerFrame] = []

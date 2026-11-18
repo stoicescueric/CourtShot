@@ -239,11 +239,11 @@ class TestTeamMetrics:
             _make_player_frame(0, player_id="P_001", team_id="T_1", y=10.0),
             _make_player_frame(0, player_id="P_002", team_id="T_1", y=5.0),
             _make_player_frame(1, player_id="P_001", team_id="T_1", y=2.0),
-            _make_player_frame(1, player_id="P_002", team_id="T_1", y=3.0),
+            _make_player_frame(1, player_id="P_002", team_id="T_1", y=2.5),
         ]
         tm = self.calc.compute_team_metrics([], pfs, "T_1")
-        # Frame 0: P_001 at y=10 (in net zone 7-13) → net frame
-        # Frame 1: both below 7 → not net frame
+        # Frame 0: P_001 at y=10 (in net zone 3-17, between the service lines) → net frame
+        # Frame 1: both behind the service line (y < 3) → not net frame
         assert tm.net_control_pct == pytest.approx(0.5)
 
     def test_avg_pair_distance(self):

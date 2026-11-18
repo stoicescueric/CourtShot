@@ -16,6 +16,7 @@ to that flattening; from the side the bodies look flat.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pickle
@@ -26,7 +27,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from stable_ids import stabilize_tracking  # noqa: E402
+from stable_ids import StableIdConfig, cache_appearance, frame_rate, stabilize_tracking  # noqa: E402
 import ball_track as bt  # noqa: E402
 import ball3d as b3  # noqa: E402
 
@@ -185,6 +186,73 @@ def lift_players(stable, cam: b3.Camera, n_frames: int, hits: list) -> list[dict
     return players
 
 
+def key_path(cache3d: Path) -> Path:
+    return cache3d.with_suffix(".key.json")
+
+
+def fit_key(tracking_cache: Path, fps: float) -> dict:
+    """What a saved 3D fit depends on: the tracking it was fitted to and the
+    settings of the 2D and 3D ball steps. Kept next to the fit, so a fit made
+    from other tracking (or other settings) is not reused."""
+    h = hashlib.sha1()
+    with open(tracking_cache, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return {"tracking_sha1": h.hexdigest(), "fps": round(fps, 4),
+            "ball_settings": repr(bt.BallSettings()), "fit_settings": repr(b3.FitSettings())}
+
+
+def stale_reason(cache3d: Path, tracking_cache: Path, key: dict) -> str | None:
+    """Why the saved 3D fit can't be reused, or None if it can."""
+    if not cache3d.exists():
+        return "missing"
+    kp = key_path(cache3d)
+    if not kp.exists():
+        # Fit saved before keys existed: all we can tell is which file is newer.
+        if cache3d.stat().st_mtime < tracking_cache.stat().st_mtime:
+            return "it is older than the tracking cache"
+        return None
+    try:
+        saved = json.loads(kp.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "its key file is unreadable"
+    changed = [k for k in key if saved.get(k) != key[k]]
+    return f"changed since it was fitted: {', '.join(changed)}" if changed else None
+
+
+def ball3d_for(tracking_cache, stable, res2d, fps: float, id_report: dict | None = None,
+               refit: bool = False):
+    """The 3D ball flights for a tracking cache: the saved fit when it was
+    made from this tracking, these player identities and these settings,
+    otherwise a new fit (a minute or two per minute of play), which is saved.
+
+    Returns None when there is no court calibration or no ball track.
+    """
+    tracking_cache = Path(tracking_cache)
+    cache3d = tracking_cache.with_name(tracking_cache.stem + "_ball3d.pkl")
+    key = fit_key(tracking_cache, fps)
+    # who hit each ball depends on the player identities
+    key["player_ids"] = (repr(StableIdConfig()) + " swaps "
+                         + json.dumps((id_report or {}).get("swaps_fixed", [])))
+    reason = "refit asked for" if refit else stale_reason(cache3d, tracking_cache, key)
+    if cache3d.exists() and reason is None:
+        with open(cache3d, "rb") as f:   # your own Padex cache file
+            r3 = pickle.load(f)
+        print(f"3D ball: loaded {cache3d} ({len(r3.flights)} flights)", flush=True)
+        return r3
+    if cache3d.exists():
+        print(f"3D ball: not reusing {cache3d} ({reason})", flush=True)
+    print("3D ball: fitting flights (takes a minute or so)...", flush=True)
+    r3 = b3.run_on_tracking(stable, res2d, fps)
+    if r3 is None:
+        return None
+    with open(cache3d, "wb") as f:
+        pickle.dump(r3, f)
+    key_path(cache3d).write_text(json.dumps(key, indent=1), encoding="utf-8")
+    print(f"3D ball: {sum(f.ok for f in r3.flights)}/{len(r3.flights)} flights fit well; saved {cache3d}", flush=True)
+    return r3
+
+
 def build_scene(stable, res2d, r3, fps: float) -> dict:
     n = max(pf.frame_id for pf in stable.player_frames) + 1
     n = max(n, len(stable.ball_frames))
@@ -248,25 +316,14 @@ def main():
     a = ap.parse_args()
 
     raw = pickle.load(open(a.cache, "rb"))
-    fps = a.fps
-    if fps is None:
-        pf = next(p for p in raw.player_frames if p.frame_id > 0 and p.timestamp_ms > 0)
-        fps = pf.frame_id / (pf.timestamp_ms / 1000.0)
+    fps = a.fps or frame_rate(raw)
     print(f"frame rate {fps:.3f} fps", flush=True)
-    stable, _ = stabilize_tracking(raw)
+    appearance = cache_appearance(a.cache)
+    stable, id_report = stabilize_tracking(raw, appearance=appearance)
     res2d = bt.run_on_tracking(stable, fps)
-
-    cache3d = Path(a.cache).with_name(Path(a.cache).stem + "_ball3d.pkl")
-    if cache3d.exists() and not a.refit:
-        r3 = pickle.load(open(cache3d, "rb"))
-        print(f"3D ball: loaded {cache3d} ({len(r3.flights)} flights)", flush=True)
-    else:
-        print("3D ball: fitting flights (takes several minutes)...", flush=True)
-        r3 = b3.run_on_tracking(stable, res2d, fps)
-        if r3 is None:
-            sys.exit("no court calibration or ball track in this cache; cannot build a 3D scene")
-        pickle.dump(r3, open(cache3d, "wb"))
-        print(f"3D ball: {sum(f.ok for f in r3.flights)}/{len(r3.flights)} flights fit well; saved {cache3d}", flush=True)
+    r3 = ball3d_for(a.cache, stable, res2d, fps, id_report, refit=a.refit)
+    if r3 is None:
+        sys.exit("no court calibration or ball track in this cache; cannot build a 3D scene")
 
     scene = build_scene(stable, res2d, r3, fps)
     out = Path(a.out)
@@ -279,15 +336,15 @@ def main():
         scene["video"] = None
         print("video: none found - the page will ask for one (use --video)", flush=True)
     data = json.dumps(scene, separators=(",", ":"))
-    html = (HERE / "viewer3d_template.html").read_text()
+    html = (HERE / "viewer3d_template.html").read_text(encoding="utf-8")
     html = html.replace("/*SCENE_DATA*/null", data)
     if not a.fragment:
         html = ('<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
                 '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
                 + html + "\n</html>\n")
-    out.write_text(html)
+    out.write_text(html, encoding="utf-8")
     if a.json:
-        out.with_suffix(".json").write_text(data)
+        out.with_suffix(".json").write_text(data, encoding="utf-8")
     print(f"wrote {out} ({len(html) / 1e6:.1f} MB) - open it in a browser", flush=True)
 
 

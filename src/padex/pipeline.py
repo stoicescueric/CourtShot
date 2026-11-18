@@ -21,8 +21,10 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import pickle
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -71,7 +73,10 @@ class Padex:
         use_tracknet_v3: bool = False,
         ball_model_path: str | Path | None = None,
         event_model_path: str | Path | None = None,
+        max_players: int | None = None,
     ) -> None:
+        self.max_players = max_players
+        self.tracking_from_cache = False
         self.video_path = Path(video_path)
         if not self.video_path.exists():
             raise FileNotFoundError(f"Video not found: {self.video_path}")
@@ -197,7 +202,20 @@ class Padex:
     def _run_tracking(self) -> TrackingResult:
         cache_path = self.cache_dir / f"{self.video_path.stem}_tracking_cache.pkl"
 
+        key = self._tracking_key()
+        key_path = cache_path.with_suffix(".key.json")
         if self.cache_tracking and cache_path.exists():
+            reason = self._stale_reason(key_path, key)
+            if reason is not None:
+                old = cache_path.with_suffix(".old.pkl")
+                os.replace(cache_path, old)
+                logger.warning(
+                    "Not reusing %s: %s. Kept as %s; tracking again.",
+                    cache_path.name, reason, old.name,
+                )
+
+        if self.cache_tracking and cache_path.exists():
+            self.tracking_from_cache = True
             logger.info("=== Stage 1: Loading cached tracking results ===")
             with open(cache_path, "rb") as f:
                 tracking = pickle.load(f)
@@ -215,6 +233,7 @@ class Padex:
             manual_calibration=self._calibration,
             use_tracknet_v3=self.use_tracknet_v3,
             ball_model_path=self.ball_model_path,
+            max_players=self.max_players,
         )
         tracking = pipeline.run()
         logger.info(
@@ -227,15 +246,59 @@ class Padex:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             with open(cache_path, "wb") as f:
                 pickle.dump(tracking, f)
+            key_path.write_text(json.dumps(key, indent=1), encoding="utf-8")
             logger.info("Tracking results cached: %s", cache_path)
 
         return tracking
+
+    def _tracking_key(self) -> dict[str, object]:
+        """Everything the cached tracking depends on. Saved next to the cache
+        so tracking made from another video, calibration, model or setting is
+        not mistaken for this run's."""
+        from padex.tracking.device import use_pose_closeups_only
+
+        def file_id(path: str | Path | None) -> str | None:
+            if path is None:
+                return None
+            p = Path(path)
+            return f"{p.name}:{p.stat().st_size}" if p.exists() else p.name
+
+        cal = self._calibration.model_dump_json() if self._calibration else ""
+        return {
+            "video": file_id(self.video_path),
+            "calibration_sha1": hashlib.sha1(cal.encode()).hexdigest(),
+            "ball_model": file_id(self.ball_model_path),
+            "use_tracknet_v3": self.use_tracknet_v3,
+            "enable_pose": self.enable_pose,
+            "tracker": os.environ.get("PADEX_TRACKER", "padex_bytetrack.yaml"),
+            "max_players": self.max_players,
+            "pose_closeups_only": bool(self.enable_pose and use_pose_closeups_only()),
+        }
+
+    @staticmethod
+    def _stale_reason(key_path: Path, key: dict[str, object]) -> str | None:
+        """Why the cache can't be reused, or None if it can."""
+        if not key_path.exists():
+            # Cache from before keys were saved: nothing to compare with.
+            logger.warning(
+                "%s is missing, so the cached tracking can't be checked against "
+                "the current video, calibration and models. Delete the cache to "
+                "re-track.", key_path.name,
+            )
+            return None
+        try:
+            saved = json.loads(key_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return "its key file is unreadable"
+        changed = [k for k in key if saved.get(k) != key[k]]
+        return f"changed since it was made: {', '.join(changed)}" if changed else None
 
     def export_video(
         self,
         result: PadexResult,
         output_path: str | Path,
         shot_display_ms: float = 1500.0,
+        ball_speeds: dict[int, float] | None = None,
     ) -> Path:
         """Export annotated video with shot labels overlaid.
 
@@ -243,6 +306,8 @@ class Padex:
             result: PadexResult from run().
             output_path: Path for the output video file.
             shot_display_ms: How long to display each shot label (ms).
+            ball_speeds: Ball speed in km/h per frame_id; where given, it is
+                written next to the ball and in the stats panel.
 
         Returns:
             Path to the exported video file.
@@ -304,6 +369,9 @@ class Padex:
                             active_bounces.append((bounce, progress))
 
                     stats = {"Frame": frame_id, "Shots": len(result.shots)}
+                    speed = ball_speeds.get(frame_id) if ball_speeds else None
+                    if ball_speeds is not None:
+                        stats["Ball"] = f"{speed:.0f} km/h" if speed is not None else "-"
                     for shot_type, count in sorted(
                         shot_counts.items(), key=lambda x: -x[1]
                     )[:4]:
@@ -318,6 +386,7 @@ class Padex:
                         shot=active_shot,
                         stats=stats,
                         active_bounces=active_bounces,
+                        ball_speed_kmh=speed,
                     )
                     writer.write(frame)
 

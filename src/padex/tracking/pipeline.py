@@ -11,6 +11,7 @@ Description:
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -19,7 +20,7 @@ import numpy as np
 from padex.schemas.tracking import BallFrame, CourtCalibration, PlayerFrame
 from padex.tracking.ball import BallDetector, SahiYoloBallDetectionStrategy, TrackNetV3BallDetectionStrategy
 from padex.tracking.court import CourtDetector
-from padex.tracking.device import detect_device
+from padex.tracking.device import detect_device, use_threads
 from padex.tracking.player import (
     PlayerDetector,
     YoloPlayerDetectionStrategy,
@@ -59,6 +60,7 @@ class TrackingPipeline:
         enable_pose: bool = False,
         use_tracknet_v3: bool = False,
         ball_model_path: str | None = None,
+        max_players: int | None = None,
     ) -> None:
         self.video_path = Path(video_path)
         self.device = device or detect_device()
@@ -67,11 +69,11 @@ class TrackingPipeline:
         pose_strategy = (
             YoloPoseEstimationStrategy(device=self.device) if enable_pose else None
         )
-
         self.court_detector = court_detector or CourtDetector()
         self.player_detector = player_detector or PlayerDetector(
             detection_strategy=YoloPlayerDetectionStrategy(device=self.device),
             pose_strategy=pose_strategy,
+            max_players=max_players,
         )
         self.ball_detector = ball_detector or BallDetector(
             use_tracknet=not use_tracknet_v3,
@@ -138,32 +140,60 @@ class TrackingPipeline:
                 self.ball_detector.tracker.set_homography(H)
 
             # Stage 2: Per-frame detection (streaming — no frame buffering)
+            # The ball and the players are independent, so the ball model runs
+            # on a worker thread while the main thread handles the players.
+            # Each frame's ball result is collected before the next frame
+            # starts, so the output is the same as running them in turn.
             processed = 0
-            for frame_id, timestamp_ms, frame in reader.frames(
-                start_frame=start_frame, end_frame=end_frame, step=step
-            ):
-                # Player detection + tracking
-                pf_list = self.player_detector.detect_and_track(
-                    frame, frame_id, timestamp_ms, homography_matrix=H
-                )
-                player_frames.extend(pf_list)
+            ball_pool = (
+                ThreadPoolExecutor(max_workers=1, thread_name_prefix="padex-ball")
+                if use_threads()
+                else None
+            )
+            try:
+                for frame_id, timestamp_ms, frame in reader.frames(
+                    start_frame=start_frame, end_frame=end_frame, step=step
+                ):
+                    # Ball detection + tracking (streaming; results arrive a few
+                    # frames late when the detector smooths over time)
+                    ball_future = None
+                    if ball_pool is not None:
+                        ball_future = ball_pool.submit(
+                            self.ball_detector.detect_and_track_smoothed,
+                            frame, frame_id, timestamp_ms,
+                        )
 
-                # Ball detection + tracking (streaming; results arrive a few
-                # frames late when the detector smooths over time)
-                ball_frames.extend(
-                    self.ball_detector.detect_and_track_smoothed(
-                        frame, frame_id, timestamp_ms
-                    )
-                )
+                    # Player detection + tracking
+                    try:
+                        pf_list = self.player_detector.detect_and_track(
+                            frame, frame_id, timestamp_ms, homography_matrix=H
+                        )
+                    except BaseException:
+                        if ball_future is not None:
+                            ball_future.exception()  # wait: never leave the worker running
+                        raise
+                    player_frames.extend(pf_list)
 
-                processed += 1
-                if processed % 500 == 0:
-                    logger.info(
-                        "Processed %d / %d frames (%.1f%%)",
-                        processed,
-                        total_frames,
-                        100.0 * processed / total_frames,
-                    )
+                    if ball_future is not None:
+                        ball_frames.extend(ball_future.result())
+                    else:
+                        ball_frames.extend(
+                            self.ball_detector.detect_and_track_smoothed(
+                                frame, frame_id, timestamp_ms
+                            )
+                        )
+
+                    processed += 1
+                    if processed % 500 == 0:
+                        logger.info(
+                            "Processed %d / %d frames (%.1f%%)",
+                            processed,
+                            total_frames,
+                            100.0 * processed / total_frames,
+                        )
+            finally:
+                if ball_pool is not None:
+                    ball_pool.shutdown(wait=True)
 
             ball_frames.extend(self.ball_detector.flush())
 

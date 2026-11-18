@@ -18,7 +18,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from stable_ids import stabilize_tracking
+from stable_ids import cache_appearance, stabilize_tracking
 import ball_track as bt
 
 
@@ -37,7 +37,7 @@ def main():
     n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
     raw = pickle.load(open(cache, "rb"))
-    stable, _ = stabilize_tracking(raw)
+    stable, _ = stabilize_tracking(raw, appearance=cache_appearance(cache))
     res = bt.run_on_tracking(stable, fps)
 
     det = np.zeros(n, bool)

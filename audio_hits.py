@@ -129,13 +129,14 @@ def main() -> None:
     import cv2
 
     import ball_track as bt
-    from stable_ids import stabilize_tracking
+    from stable_ids import cache_appearance, stabilize_tracking
 
     cap = cv2.VideoCapture(str(a.video))
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     cap.release()
-    raw = pickle.load(open(a.video.with_name(a.video.stem + "_tracking_cache.pkl"), "rb"))
-    stable, _ = stabilize_tracking(raw)
+    cache = a.video.with_name(a.video.stem + "_tracking_cache.pkl")
+    raw = pickle.load(open(cache, "rb"))
+    stable, _ = stabilize_tracking(raw, appearance=cache_appearance(cache))
     res = bt.run_on_tracking(stable, fps)
     if res is None:
         raise SystemExit("No ball detections or no calibration in the cache.")

@@ -36,6 +36,11 @@ Usage (no changes to the Padex library needed):
     p.export_video(result, "output/stable_ids.mp4")
     print(p.id_report)
 
+Position and motion cannot tell who is who once two players have traded
+places unseen, so afterwards the result is checked against what the players
+look like (appearance.py) and identity swaps between players who look
+different are undone. See StablePlayerIds._fix_swaps.
+
 Tracking stays cached as raw tracker output, so you can change the
 StableIdConfig settings and rerun without redoing tracking.
 """
@@ -77,6 +82,17 @@ class StableIdConfig:
     velocity_timeout: float = 0.5   # stop extrapolating after this long unseen
     init_search_frames: int | None = None  # None = search whole video for a 2+2 frame
     max_gap_fill: float = 1.5       # interpolate missing detections up to this long (0 = off)
+    # Appearance check (only with appearance vectors, see appearance.py): what
+    # each track looks like is compared with who the motion step says it is.
+    look_window: float = 1.0        # a track's look at a moment = average over +- this long
+    look_seed: float = 3.0          # reference looks come from this long around the seed frame
+    look_evidence: float = 3.0      # two tracks trade labels once the looks have favoured that by
+                                    # this much in total (cosine-distance gain x seconds)...
+    look_drift: float = 0.15        # ...counting only gain above this much per second, so that
+                                    # look-alike partners never add up to a switch
+    look_learn: float = 0.03        # how fast the first-pass reference looks follow a player (per sample)
+    look_rounds: int = 5            # the labelling must confirm itself within this many passes
+    look_gap: float = 0.3           # a track unseen this long "reappears" (a likely switch point)
 
 
 @dataclass
@@ -119,10 +135,15 @@ class StablePlayerIds:
     def __init__(self, config: StableIdConfig | None = None) -> None:
         self.cfg = config or StableIdConfig()
         self.report: dict[str, object] = {}
+        # For tuning the appearance check: (direction, time_s, track a, track b,
+        # gain, evidence) at every step of the last apply().
+        self.look_trace: list[tuple[int, float, int, int, float, float]] = []
 
     # -- public -----------------------------------------------------------
 
-    def apply(self, player_frames: list[PlayerFrame]) -> list[PlayerFrame]:
+    def apply(self, player_frames: list[PlayerFrame], appearance=None) -> list[PlayerFrame]:
+        """appearance: an appearance.Appearance for these frames, or None to
+        go by position and motion only."""
         by_frame: dict[int, list[PlayerFrame]] = defaultdict(list)
         for pf in player_frames:
             if pf.position is not None:
@@ -146,6 +167,10 @@ class StablePlayerIds:
             for fid in order:
                 for det_idx, slot_idx in self._assign(by_frame[fid], slots).items():
                     assignments[(fid, det_idx)] = slot_idx
+
+        swaps: list[dict[str, object]] = []
+        if appearance is not None:
+            swaps = self._fix_swaps(frame_ids, by_frame, assignments, appearance, init_idx)
 
         out: list[PlayerFrame] = []
         dropped = 0
@@ -173,6 +198,8 @@ class StablePlayerIds:
             "interpolated_frames": len(filled),
             "seed_frame": frame_ids[init_idx],
             "dropped_detections": dropped,
+            "appearance_used": appearance is not None,
+            "swaps_fixed": swaps,
             "frames_per_player": dict(frames_per_slot),
             "tracker_ids_merged": {
                 n: dict(c.most_common()) for n, c in ids_per_slot.items()
@@ -183,6 +210,196 @@ class StablePlayerIds:
             len({pf.player_id for pf in player_frames}), dropped,
         )
         return out
+
+    # -- appearance check -------------------------------------------------
+
+    def _fix_swaps(
+        self, frame_ids, by_frame, assignments, appearance, init_idx
+    ) -> list[dict[str, object]]:
+        """Undo identity swaps the motion step made, using what the players look like.
+
+        The motion step keeps four consistent tracks, but when two players
+        cross, or one comes back after being hidden, it can attach a track to
+        the wrong person from then on. Here each track's look (averaged over
+        a moment) is compared with the four reference looks taken around the
+        seed frame. For every pair of tracks, the evidence that they carry
+        each other's labels is added up over time; once it is strong enough
+        the two labels are traded, from the point where the evidence began:
+        more exactly, where one of the two reappeared after being unseen or,
+        failing that, where they were closest together.
+
+        A look changes with pose and with where on court the player stands,
+        and for players in similar kit that can outweigh who they are for
+        many seconds. So a corrected labelling is only kept if it confirms
+        itself: the reference looks are rebuilt from the whole video under
+        the new labels and the check is run again, until the labelling comes
+        out the same twice. A real swap makes the references cleaner and is
+        found again; a false one mixes two people into each reference and
+        disappears. If no labelling confirms itself, the motion step's
+        answer stands.
+
+        Rewrites ``assignments`` in place; returns the switches made.
+        """
+        cfg = self.cfg
+        self.look_trace = []
+        n_slots = len(SLOT_NAMES)
+        n = len(frame_ids)
+        fps = appearance.fps
+        step = max(1, int(round(fps / 5)))
+        dt = step / fps
+        grid = list(range(0, n, step))           # indices into frame_ids
+        seed_g = min(init_idx // step, len(grid) - 1)
+
+        vec: dict[tuple[int, int], np.ndarray] = {}   # (index into frame_ids, track) -> look
+        pos: dict[tuple[int, int], np.ndarray] = {}
+        index = {fid: k for k, fid in enumerate(frame_ids)}
+        for (fid, det_idx), slot in assignments.items():
+            pf = by_frame[fid][det_idx]
+            k = index[fid]
+            pos[(k, slot)] = np.array([pf.position.x, pf.position.y])
+            if k % step == 0:
+                v = appearance.vector(fid, pf.player_id)
+                if v is not None:
+                    vec[(k, slot)] = v
+
+        def unit(v: np.ndarray) -> np.ndarray:
+            return v / max(float(np.linalg.norm(v)), 1e-9)
+
+        def look(g: int, slot: int, half: int, at_least: int) -> np.ndarray | None:
+            vs = [vec[(grid[j], slot)] for j in range(max(0, g - half), min(len(grid), g + half + 1))
+                  if (grid[j], slot) in vec]
+            return unit(np.mean(vs, axis=0)) if len(vs) >= at_least else None
+
+        half = max(1, int(round(cfg.look_window * fps / step)))
+        seed_half = max(1, int(round(cfg.look_seed * fps / step)))
+        ref = [look(seed_g, slot, seed_half, 3) for slot in range(n_slots)]
+        if any(r is None for r in ref):
+            logger.warning("Appearance: too few crops around the seed frame; identities by motion only")
+            return []
+
+        pairs = [(a, b) for a in range(n_slots) for b in range(a + 1, n_slots)]
+        identity = tuple(range(n_slots))
+        looks_at = [[look(g, slot, half, 2) for slot in range(n_slots)] for g in range(len(grid))]
+
+        def label_tracks(ref, learn: float):
+            """Labels per grid point that fit these reference looks, starting
+            from the motion step's labels at the seed and going both ways."""
+            label_at: list[tuple[int, ...]] = [identity] * len(grid)
+            switches: list[tuple[int, tuple[int, ...], tuple[int, ...]]] = []  # (grid point, before, after), by time
+            for direction in (1, -1):
+                refs = [r.copy() for r in ref]
+                current = list(identity)
+                evidence = dict.fromkeys(pairs, 0.0)
+                since = dict.fromkeys(pairs, seed_g)
+                g = seed_g
+                while 0 <= g < len(grid):
+                    looks = looks_at[g]
+                    dist = [None if v is None else [1.0 - float(v @ r) for r in refs] for v in looks]
+                    switched = False
+                    for a, b in pairs:
+                        if dist[a] is None or dist[b] is None:
+                            continue
+                        ia, ib = current[a], current[b]
+                        # how much better the two tracks fit each other's labels than their own
+                        gain = (dist[a][ia] + dist[b][ib]) - (dist[a][ib] + dist[b][ia])
+                        if evidence[(a, b)] <= 0.0:
+                            since[(a, b)] = g
+                        evidence[(a, b)] = max(0.0, evidence[(a, b)] + (gain - cfg.look_drift) * dt)
+                        self.look_trace.append((direction, g * dt, a, b, gain, evidence[(a, b)]))
+                        if evidence[(a, b)] >= cfg.look_evidence:
+                            before = tuple(current)
+                            current[a], current[b] = ib, ia
+                            after = tuple(current)
+                            g0 = since[(a, b)]
+                            lo, hi = sorted((g0, g))
+                            for j in range(lo, hi + 1):
+                                label_at[j] = after
+                            switches.append((g0, before, after) if direction > 0 else (g0 + 1, after, before))
+                            evidence = dict.fromkeys(pairs, 0.0)
+                            switched = True
+                            break
+                    if learn > 0 and not switched and not any(e > 0.0 for e in evidence.values()):
+                        # nothing speaks against the labels: let the references follow the players
+                        for slot, v in enumerate(looks):
+                            if v is not None:
+                                i = current[slot]
+                                refs[i] = unit(refs[i] * (1 - learn) + v * learn)
+                    label_at[g] = tuple(current)
+                    g += direction
+            return label_at, switches
+
+        def whole_video_refs(label_at):
+            """Each player's look over the whole video under these labels."""
+            sums = [np.zeros_like(ref[0]) for _ in range(n_slots)]
+            for (k, slot), v in vec.items():
+                sums[label_at[k // step][slot]] += v
+            return [unit(v) for v in sums]
+
+        # First pass: references from around the seed frame, following the
+        # players. Then confirm with references from the whole video, also
+        # when the first pass found nothing: those references are steadier
+        # and show swaps the first pass only nearly had enough evidence for.
+        label_at, switches = label_tracks(ref, cfg.look_learn)
+        confirmed = False
+        for _ in range(cfg.look_rounds):
+            if confirmed:
+                break
+            self.look_trace = []
+            again, switches_again = label_tracks(whole_video_refs(label_at), 0.0)
+            confirmed = again == label_at
+            label_at, switches = again, switches_again
+        if not confirmed:
+            logger.warning("Appearance: no labelling confirmed itself; identities by motion only")
+            return []
+
+        per_frame = [label_at[k // step] for k in range(n)]
+
+        # The evidence comes from looks averaged over a window, so the moment
+        # it began is only known to within that window. Put the switch where
+        # one of the two tracks reappeared after being unseen or, if both were
+        # in view throughout, where they were closest together.
+        report: list[dict[str, object]] = []
+        reach = 2 * half * step
+        gap = max(2, int(round(cfg.look_gap * fps)))
+        for g, before, after in sorted(switches):
+            nominal = grid[min(g, len(grid) - 1)]
+            moved = [slot for slot in range(n_slots) if before[slot] != after[slot]]
+            lo, hi = max(0, nominal - reach), min(n - 1, nominal + reach)
+            cut = None
+            longest = 0
+            for slot in moved:
+                run = 0
+                for k in range(lo, hi + 1):
+                    if (k, slot) in pos:
+                        if run >= gap and run > longest:
+                            cut, longest = k, run
+                        run = 0
+                    else:
+                        run += 1
+            if cut is None:
+                best_d = np.inf
+                for k in range(lo, hi + 1):
+                    pa, pb = pos.get((k, moved[0])), pos.get((k, moved[1]))
+                    if pa is None or pb is None:
+                        continue
+                    d = float(np.linalg.norm(pa - pb))
+                    if d < best_d:
+                        cut, best_d = k, d
+            if cut is None:
+                cut = nominal
+            for k in range(min(cut, nominal), max(cut, nominal)):
+                per_frame[k] = after if cut < nominal else before
+            report.append({
+                "frame": int(frame_ids[cut]),
+                "time_s": round(float(by_frame[frame_ids[cut]][0].timestamp_ms) / 1000.0, 2),
+                "players": sorted(SLOT_NAMES[after[slot]] for slot in moved),
+            })
+
+        for key in list(assignments):
+            assignments[key] = per_frame[index[key[0]]][assignments[key]]
+        if report:
+            logger.info("Appearance: corrected %d identity switch(es): %s", len(report), report)
+        return report
 
     # -- gap filling ------------------------------------------------------
 
@@ -360,11 +577,15 @@ class StablePlayerIds:
 
 
 def stabilize_tracking(
-    tracking: TrackingResult, config: StableIdConfig | None = None
+    tracking: TrackingResult, config: StableIdConfig | None = None, appearance=None
 ) -> tuple[TrackingResult, dict[str, object]]:
-    """Return a copy of a TrackingResult with player IDs mapped to P_1..P_4."""
+    """Return a copy of a TrackingResult with player IDs mapped to P_1..P_4.
+
+    appearance: optional appearance.Appearance of these frames; with it,
+    identity swaps are corrected by what the players look like.
+    """
     mapper = StablePlayerIds(config)
-    frames = mapper.apply(tracking.player_frames)
+    frames = mapper.apply(tracking.player_frames, appearance)
     return (
         TrackingResult(
             player_frames=frames,
@@ -375,15 +596,74 @@ def stabilize_tracking(
     )
 
 
+def frame_rate(tracking: TrackingResult, default: float = 30.0) -> float:
+    """Frames per second of the tracked video: the median over all frames of
+    frame-number step / time step (one frame's timestamp can be off)."""
+    stamps = {pf.frame_id: pf.timestamp_ms / 1000.0 for pf in tracking.player_frames}
+    stamps.update({bf.frame_id: bf.timestamp_ms / 1000.0 for bf in tracking.ball_frames})
+    fids = np.array(sorted(stamps))
+    if len(fids) < 2:
+        return default
+    secs = np.array([stamps[f] for f in fids])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rates = np.diff(fids) / np.diff(secs)
+    rates = rates[np.isfinite(rates) & (rates > 0)]
+    return float(np.median(rates)) if len(rates) else default
+
+
+def cache_appearance(tracking_cache, video=None, tracking=None):
+    """Appearance vectors saved for a tracking cache (made now if a video is
+    given and there are none), or None when they are not available. With
+    None, stabilize_tracking goes by position and motion only."""
+    try:
+        from appearance import appearance_for
+
+        return appearance_for(tracking_cache, video=video, tracking=tracking)
+    except ImportError as exc:  # appearance.py or its image model not installed
+        logger.warning("Appearance check off (%s); identities by position and motion only", exc)
+        return None
+
+
 class StablePadex(Padex):
     """Padex pipeline with stable player IDs applied before event detection."""
 
     def __init__(self, *args, id_config: StableIdConfig | None = None, **kwargs) -> None:
+        # Keep more than the 4 most confident people per frame: the mapping to
+        # P_1..P_4 below picks the players by position and motion, which is a
+        # better judge than detection confidence when an umpire or a
+        # reflection scores higher than a far player.
+        kwargs.setdefault("max_players", 8)
         super().__init__(*args, **kwargs)
         self.id_config = id_config
         self.id_report: dict[str, object] = {}
 
     def _run_tracking(self) -> TrackingResult:
         raw = super()._run_tracking()  # cached as raw tracker output
-        stable, self.id_report = stabilize_tracking(raw, self.id_config)
+        cache_path = self.cache_dir / f"{self.video_path.stem}_tracking_cache.pkl"
+        appearance = None
+        if cache_path.exists():
+            # saved next to the cache, so the report and the 3D replay (which
+            # read the caches) end up with the same identities
+            appearance = cache_appearance(cache_path, video=self.video_path, tracking=raw)
+        stable, self.id_report = stabilize_tracking(raw, self.id_config, appearance)
         return stable
+
+    def ball_speeds(self, result) -> dict[int, float] | None:
+        """Ball speed in km/h per frame, from the fitted 3D flights, for
+        export_video(..., ball_speeds=...). The 3D fit is made here if there
+        is no saved one (a minute or two per minute of play) and saved next
+        to the tracking cache, where analyze_match.py and export_scene3d.py
+        pick it up. None when there is no ball track or no calibration."""
+        import ball3d
+        import ball_track
+        import export_scene3d
+
+        cache_path = self.cache_dir / f"{self.video_path.stem}_tracking_cache.pkl"
+        if not cache_path.exists():
+            return None
+        fps = frame_rate(result.tracking)
+        ball = ball_track.run_on_tracking(result.tracking, fps)
+        if ball is None:
+            return None
+        fit = export_scene3d.ball3d_for(cache_path, result.tracking, ball, fps, self.id_report)
+        return None if fit is None else ball3d.frame_speeds(fit, fps)

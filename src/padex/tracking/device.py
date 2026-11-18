@@ -11,6 +11,7 @@ Description:
 from __future__ import annotations
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -56,3 +57,32 @@ def detect_device() -> str:
     logger.info("No GPU detected, using CPU")
     _cached_device = "cpu"
     return _cached_device
+
+
+def use_half_precision(device: str | None) -> bool:
+    """Whether to run models in half precision (FP16) on this device.
+
+    FP16 roughly halves GPU inference time on CUDA with near-identical
+    detections. It is off on CPU and MPS, where it is slow or unreliable.
+    Set PADEX_FP16=0 to force full precision.
+    """
+    if os.environ.get("PADEX_FP16", "1").strip().lower() in ("0", "false", "no", "off"):
+        return False
+    return str(device or "").startswith("cuda")
+
+
+def use_pose_closeups_only() -> bool:
+    """Whether pose comes only from close-ups of the detected players, without
+    the full-frame pose pass (PADEX_POSE_CLOSEUPS=1). Off by default: tracking
+    runs faster, but the near players get a usable pose a little less often.
+    """
+    return os.environ.get("PADEX_POSE_CLOSEUPS", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def use_threads() -> bool:
+    """Whether independent models may run on worker threads at the same time.
+
+    Results are identical either way; set PADEX_THREADS=0 to run everything
+    on one thread (e.g. to debug or to profile a single model).
+    """
+    return os.environ.get("PADEX_THREADS", "1").strip().lower() not in ("0", "false", "no", "off")

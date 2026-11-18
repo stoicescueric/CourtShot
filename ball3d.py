@@ -26,6 +26,11 @@ net at y = 10.
 
 from __future__ import annotations
 
+import multiprocessing
+import os
+import sys
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 
 import cv2
@@ -447,23 +452,18 @@ class Ball3DResult:
     positions: dict[int, np.ndarray] = field(default_factory=dict)  # frame -> xyz (ok flights only)
 
 
-def reconstruct(ball_result, ball_px: dict[int, tuple[float, float]], player_pos: dict,
-                cam: Camera, fps: float, s: FitSettings | None = None,
-                player_boxes: dict | None = None) -> Ball3DResult:
-    """Fit a 3D flight between every pair of consecutive hits ball_track found.
+class _FlightSolver:
+    """Everything needed to fit the flight after one hit. Picklable, so the
+    hits of a match can be fitted in separate processes."""
 
-    A flight that can't be explained by one launch (bad fit) usually hides
-    a hit the 2D step missed. Such flights are split at the most likely
-    point (a break in the 2D track, preferably within a player's reach) and
-    each half is fitted again; the split is kept if both halves fit.
-    """
-    s = s or FitSettings()
-    hits = sorted((e for e in ball_result.events if e.kind == "hit"), key=lambda e: e.time_s)
-    track = ball_result.track  # frame -> 2D track position (pixels)
-    breaks = sorted({e.time_s for e in ball_result.events if e.kind != "hit"}
-                    | {a.t0 / fps for a in ball_result.arcs} | {a.t1 / fps for a in ball_result.arcs})
+    def __init__(self, cam: Camera, fps: float, s: FitSettings, ball_px: dict, track: dict,
+                 breaks: list, player_pos: dict, player_boxes: dict | None):
+        self.cam, self.fps, self.s = cam, fps, s
+        self.ball_px, self.track, self.breaks = ball_px, track, breaks
+        self.player_pos, self.player_boxes = player_pos, player_boxes
 
-    def detections(t_a, t_b):
+    def detections(self, t_a, t_b):
+        fps, s, ball_px, track = self.fps, self.s, self.ball_px, self.track
         f0, f1 = int(np.ceil(t_a * fps)) + 1, int(np.floor(t_b * fps)) - 1
         fr = np.array([f for f in range(f0, f1 + 1) if f in ball_px and f in track])
         if len(fr) == 0:
@@ -473,39 +473,40 @@ def reconstruct(ball_result, ball_px: dict[int, tuple[float, float]], player_pos
         keep = np.hypot(*(px - tr).T) <= s.outlier_px
         return fr[keep], px[keep]
 
-    def who_hit(t):
+    def who_hit(self, t):
         """Player within reach of the 2D ball position at time t, if any."""
-        if player_boxes is None:
+        if self.player_boxes is None:
             return None
-        f = int(round(t * fps))
-        p = track.get(f)
+        f = int(round(t * self.fps))
+        p = self.track.get(f)
         if p is None:
             return None
         from ball_track import BallSettings, players_near
-        name, _ = players_near(f, player_boxes, p, BallSettings())
+        name, _ = players_near(f, self.player_boxes, p, BallSettings())
         return name
 
-    def fit(t_a, t_b, hitter, end_xy):
-        fr, px = detections(t_a, t_b)
-        hit_xy = player_pos.get((int(round(t_a * fps)), hitter)) if hitter else None
-        fl = fit_flight(cam, fr, px, fps, t_a, t_b, hit_xy, end_xy, s)
+    def fit(self, t_a, t_b, hitter, end_xy):
+        fr, px = self.detections(t_a, t_b)
+        hit_xy = self.player_pos.get((int(round(t_a * self.fps)), hitter)) if hitter else None
+        fl = fit_flight(self.cam, fr, px, self.fps, t_a, t_b, hit_xy, end_xy, self.s)
         if fl is not None:
             fl.hitter = hitter
         return fl
 
-    def solve(t_a, t_b, hitter, end_xy, depth=0):
-        fl = fit(t_a, t_b, hitter, end_xy)
+    def solve(self, t_a, t_b, hitter, end_xy, depth=0):
+        fps, player_pos = self.fps, self.player_pos
+        fl = self.fit(t_a, t_b, hitter, end_xy)
         if fl is None or fl.ok or depth >= 2:
             return [fl] if fl is not None else []
-        cands = [t for t in breaks if t_a + 0.3 < t < t_b - 0.3]
+        cands = [t for t in self.breaks if t_a + 0.3 < t < t_b - 0.3]
         # prefer breaks within a player's reach (likely missed hits)
-        cands.sort(key=lambda t: (who_hit(t) is None, abs(t - (t_a + t_b) / 2)))
+        cands.sort(key=lambda t: (self.who_hit(t) is None, abs(t - (t_a + t_b) / 2)))
         best, best_cost = None, np.inf
         for t in cands[:4]:
-            mid_hitter = who_hit(t)
+            mid_hitter = self.who_hit(t)
             mid_xy = player_pos.get((int(round(t * fps)), mid_hitter)) if mid_hitter else None
-            left = fit(t_a, t, hitter, mid_xy)
-            right = fit(t, t_b, mid_hitter, end_xy)
+            left = self.fit(t_a, t, hitter, mid_xy)
+            right = self.fit(t, t_b, mid_hitter, end_xy)
             if left is None or right is None:
                 continue
             cost = left.rms_px ** 2 * len(left.frames) + right.rms_px ** 2 * len(right.frames)
@@ -514,9 +515,74 @@ def reconstruct(ball_result, ball_px: dict[int, tuple[float, float]], player_pos
         if best is None:
             return [fl]
         t, mh, mxy = best
-        return solve(t_a, t, hitter, mxy, depth + 1) + solve(t, t_b, mh, end_xy, depth + 1)
+        return self.solve(t_a, t, hitter, mxy, depth + 1) + self.solve(t, t_b, mh, end_xy, depth + 1)
 
-    flights: list[Flight] = []
+
+_worker_solver: _FlightSolver | None = None
+
+
+def _init_worker(solver: _FlightSolver) -> None:
+    global _worker_solver
+    _worker_solver = solver
+
+
+def _solve_job(job) -> list:
+    return _worker_solver.solve(*job)
+
+
+@contextmanager
+def _importable_main():
+    """Let worker processes start when the calling script was piped in
+    (``python - <<EOF``, as run_match.sh does).
+
+    On Windows and macOS a worker re-runs the main script from its path. A
+    piped script has no real path ("<stdin>"), the worker dies on start and
+    the pool waits for ever. The workers only need this module, so hide the
+    fake path while they are started.
+    """
+    main = sys.modules.get("__main__")
+    path = getattr(main, "__file__", None)
+    hide = path is not None and getattr(main, "__spec__", None) is None and not os.path.isfile(path)
+    if hide:
+        del main.__file__
+    try:
+        yield
+    finally:
+        if hide:
+            main.__file__ = path
+
+
+def _default_workers() -> int:
+    """Processes for the flight fits: $PADEX_WORKERS, else half the logical
+    CPUs (roughly the physical cores; the fit is pure number crunching)."""
+    env = os.environ.get("PADEX_WORKERS", "").strip()
+    if env:
+        return max(1, int(env))
+    return max(1, (os.cpu_count() or 2) // 2)
+
+
+def reconstruct(ball_result, ball_px: dict[int, tuple[float, float]], player_pos: dict,
+                cam: Camera, fps: float, s: FitSettings | None = None,
+                player_boxes: dict | None = None, workers: int | None = None) -> Ball3DResult:
+    """Fit a 3D flight between every pair of consecutive hits ball_track found.
+
+    A flight that can't be explained by one launch (bad fit) usually hides
+    a hit the 2D step missed. Such flights are split at the most likely
+    point (a break in the 2D track, preferably within a player's reach) and
+    each half is fitted again; the split is kept if both halves fit.
+
+    The hits are independent of each other, so they are fitted in ``workers``
+    processes at once (default: see _default_workers; 1 = no extra processes).
+    The result is the same whatever the number of workers.
+    """
+    s = s or FitSettings()
+    hits = sorted((e for e in ball_result.events if e.kind == "hit"), key=lambda e: e.time_s)
+    track = ball_result.track  # frame -> 2D track position (pixels)
+    breaks = sorted({e.time_s for e in ball_result.events if e.kind != "hit"}
+                    | {a.t0 / fps for a in ball_result.arcs} | {a.t1 / fps for a in ball_result.arcs})
+    solver = _FlightSolver(cam, fps, s, ball_px, track, breaks, player_pos, player_boxes)
+
+    jobs = []
     for i, h in enumerate(hits):
         nxt = hits[i + 1] if i + 1 < len(hits) else None
         if nxt is not None and nxt.time_s - h.time_s <= s.max_flight_s * 2:
@@ -527,7 +593,18 @@ def reconstruct(ball_result, ball_px: dict[int, tuple[float, float]], player_pos
             if last is None:
                 continue
             end_t, end_xy = last / fps, None
-        flights.extend(solve(h.time_s, end_t, h.player, end_xy))
+        jobs.append((h.time_s, end_t, h.player, end_xy))
+
+    workers = min(workers or _default_workers(), len(jobs))
+    # Worker processes re-import the calling script, so only the main process
+    # may start them.
+    if workers > 1 and multiprocessing.current_process().name == "MainProcess":
+        with _importable_main(), ProcessPoolExecutor(max_workers=workers, initializer=_init_worker,
+                                                     initargs=(solver,)) as pool:
+            solved = list(pool.map(_solve_job, jobs))
+    else:
+        solved = [solver.solve(*job) for job in jobs]
+    flights: list[Flight] = [fl for part in solved for fl in part]
 
     positions: dict[int, np.ndarray] = {}
     for fl in flights:
@@ -540,7 +617,38 @@ def reconstruct(ball_result, ball_px: dict[int, tuple[float, float]], player_pos
     return Ball3DResult(cam, flights, positions)
 
 
-def run_on_tracking(tracking, ball_result, fps: float, s: FitSettings | None = None) -> Ball3DResult | None:
+def frame_speeds(result: Ball3DResult, fps: float) -> dict[int, float]:
+    """The ball's speed in km/h at every video frame covered by a well-fitted
+    flight: frame -> speed.
+
+    It is the speed along the fitted 3D path (not across the image), so it
+    does not depend on where the ball is on screen. Frames between flights,
+    and flights whose fit is poor, have no entry.
+    """
+    out: dict[int, float] = {}
+    for fl in result.flights:
+        if not fl.ok:
+            continue
+        fr = np.arange(int(np.ceil(fl.hit_time_s * fps)), int(np.floor(fl.end_time_s * fps)) + 1)
+        if len(fr) == 0:
+            continue
+        # half a frame either side of each frame: a speed for the frame
+        # itself, and none of them reaching across the hit that starts the
+        # flight or the one that ends it
+        t = np.clip(np.r_[fr / fps - 0.5 / fps, fr[-1] / fps + 0.5 / fps], fl.hit_time_s, fl.end_time_s)
+        pos = fl.at(t)
+        dt = np.diff(t)
+        ok = dt > 1e-6
+        speed = np.full(len(fr), np.nan)
+        speed[ok] = np.linalg.norm(np.diff(pos, axis=0)[ok], axis=1) / dt[ok]
+        for f, v in zip(fr, speed):
+            if np.isfinite(v):
+                out[int(f)] = float(v * 3.6)
+    return out
+
+
+def run_on_tracking(tracking, ball_result, fps: float, s: FitSettings | None = None,
+                    workers: int | None = None) -> Ball3DResult | None:
     """Convenience wrapper: tracking = Padex TrackingResult with stable IDs."""
     cal = tracking.calibration
     if cal is None or ball_result is None:
@@ -563,4 +671,4 @@ def run_on_tracking(tracking, ball_result, fps: float, s: FitSettings | None = N
     for pf in tracking.player_frames:
         b = pf.bbox
         boxes.setdefault(pf.frame_id, []).append((pf.player_id, (b.x1, b.y1, b.x2, b.y2)))
-    return reconstruct(ball_result, ball_px, pos, cam, fps, s, boxes)
+    return reconstruct(ball_result, ball_px, pos, cam, fps, s, boxes, workers)

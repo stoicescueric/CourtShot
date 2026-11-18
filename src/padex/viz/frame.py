@@ -157,6 +157,37 @@ class FrameAnnotator:
         cv2.circle(frame, (cx, cy), 8, color, -1)
         cv2.circle(frame, (cx, cy), 8, (255, 255, 255), 1)
 
+    def draw_ball_speed(
+        self,
+        frame: np.ndarray,
+        ball_frame: BallFrame | None,
+        speed_kmh: float | None,
+    ) -> None:
+        """Write the ball's speed next to the ball marker."""
+        if speed_kmh is None or ball_frame is None or ball_frame.bbox is None:
+            return
+
+        h, w = frame.shape[:2]
+        scale = max(0.5, h / 1080 * 0.7)
+        thick = max(1, round(scale * 2))
+        label = f"{speed_kmh:.0f} km/h"
+        (tw, th), _ = cv2.getTextSize(label, _FONT, scale, thick)
+        pad = max(3, round(th * 0.35))
+
+        cx = int((ball_frame.bbox.x1 + ball_frame.bbox.x2) / 2)
+        cy = int((ball_frame.bbox.y1 + ball_frame.bbox.y2) / 2)
+        # to the right of the ball, a little below it (the shot label sits
+        # above); on the left when there is no room on the right
+        x = cx + 14
+        if x + tw + pad > w:
+            x = cx - 14 - tw
+        y = min(max(cy + th + 6, th + pad), h - pad)
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x - pad, y - th - pad), (x + tw + pad, y + pad), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
+        cv2.putText(frame, label, (x, y), _FONT, scale, (59, 235, 255), thick, cv2.LINE_AA)
+
     def draw_court_lines(
         self,
         frame: np.ndarray,
@@ -326,6 +357,7 @@ class FrameAnnotator:
         shot: Shot | None = None,
         stats: dict[str, str | int | float] | None = None,
         active_bounces: list[tuple[Bounce, float]] | None = None,
+        ball_speed_kmh: float | None = None,
     ) -> np.ndarray:
         """One-stop method: apply all annotations and return the frame.
 
@@ -338,6 +370,7 @@ class FrameAnnotator:
             shot: Active shot event to display label (optional).
             stats: Stats dict to render in panel (optional).
             active_bounces: List of (Bounce, progress) for impact marks (optional).
+            ball_speed_kmh: Ball speed to write next to the ball (optional).
 
         Returns:
             The annotated frame.
@@ -347,6 +380,7 @@ class FrameAnnotator:
         self.draw_player_bboxes(frame, player_frames)
         self.draw_pose_keypoints(frame, player_frames)
         self.draw_ball(frame, ball_frame)
+        self.draw_ball_speed(frame, ball_frame, ball_speed_kmh)
         self.draw_bounce_impacts(frame, active_bounces or [], calibration)
         self.draw_shot_label(frame, shot, ball_frame)
         self.draw_mini_court(frame, player_frames, ball_frame)

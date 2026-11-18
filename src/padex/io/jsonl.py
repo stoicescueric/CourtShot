@@ -27,7 +27,7 @@ def write_jsonl(records: list[BaseModel], path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for record in records:
             f.write(record.model_dump_json() + "\n")
 
@@ -47,7 +47,7 @@ def read_jsonl(path: str | Path, model_class: type[T] | None = None) -> list[T] 
     path = Path(path)
     results: list = []
 
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line_num, line in enumerate(f, start=1):
             line = line.strip()
             if not line:
