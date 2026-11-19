@@ -1,6 +1,6 @@
 #!/bin/bash
 # Fine-tune the padel ball model further on your own labelled stretches.
-#   cd ~/padex && bash tools/retrain_own.sh match          (clips data/match_01.., data/match_val)
+#   bash tools/retrain_own.sh match          (clips data/match_01.., data/match_val)
 #
 # Starts from checkpoints/padel_tracknetv3.pt and writes a NEW model,
 # checkpoints/padel_tracknetv3_own.pt - the current one is not touched.

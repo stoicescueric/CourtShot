@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from padex.schemas.tracking import BallFrame, PlayerFrame, Position2D
+from courtshot.schemas.tracking import BallFrame, PlayerFrame, Position2D
 
 
 def test_position2d_valid():

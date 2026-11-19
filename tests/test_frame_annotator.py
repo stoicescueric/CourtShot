@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from padex.schemas.tracking import (
+from courtshot.schemas.tracking import (
     BallFrame,
     BoundingBox,
     CourtCalibration,
@@ -10,7 +10,7 @@ from padex.schemas.tracking import (
     PoseKeypoint,
     Position2D,
 )
-from padex.viz.frame import FrameAnnotator
+from courtshot.viz.frame import FrameAnnotator
 
 
 def _frame():

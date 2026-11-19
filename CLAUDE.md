@@ -1,14 +1,14 @@
-# CLAUDE.md — Padex Project Guide
+# CLAUDE.md — CourtShot Project Guide
 
-## What is Padex
+## What is CourtShot
 
-Padex is an open-source Python toolkit that transforms padel match broadcast footage into structured tracking data, event streams, and tactical analytics. It is the first comprehensive CV-based analytics pipeline purpose-built for padel.
+CourtShot is an open-source Python toolkit that transforms padel match broadcast footage into structured tracking data, event streams, and tactical analytics. It is the first comprehensive CV-based analytics pipeline purpose-built for padel.
 
-The name: padel + x (analytics/extraction).
+The name: CourtShot (the Python package and the command are `courtshot`). The project was called Padex before, and the repository folder and the GitHub repository still are; tracking caches made under the old name still load.
 
-## Why Padex Exists
+## Why CourtShot Exists
 
-Padel is a fast-growing sport with virtually no open-source analytics tooling. Unlike football, which has mature ecosystems (StatsBomb, Kloppy, socceraction, floodlight), padel has no standardized data format, no open tracking pipeline, and no community-driven analytics framework. Padex fills this gap.
+Padel is a fast-growing sport with virtually no open-source analytics tooling. Unlike football, which has mature ecosystems (StatsBomb, Kloppy, socceraction, floodlight), padel has no standardized data format, no open tracking pipeline, and no community-driven analytics framework. CourtShot fills this gap.
 
 Padel's enclosed court (glass walls + metal fences), fixed dimensions (20m × 10m), and 4-player format make it uniquely tractable for CV-based tracking compared to football's 22 players on a large open pitch. However, padel introduces its own challenges: glass reflections causing ghost detections, small fast-moving balls, and wall bounces creating complex 3D trajectories.
 
@@ -16,18 +16,18 @@ Padel's enclosed court (glass walls + metal fences), fixed dimensions (20m × 10
 
 The sections below ("Architecture", "Data Schema", "File Structure Per Match") describe the design the project is heading for. The code that exists today is the working pipeline only; see "Package Structure" for where things are. The differences that matter:
 
-- **Layer 1** is `padex.tracking`: YOLO + ByteTrack for people, YOLO-Pose, and a fine-tuned TrackNetV3 for the ball. SAM3 is not used. Court calibration is interactive (`padex calibrate`); there is no automatic court detection. Team assignment comes from the identity step (near pair = T_1, far pair = T_2 at the seed frame), not from jersey colours.
-- **Layer 2** is `padex.analysis`: stable player identities, ball events (hits, floor and wall bounces) found in image space, 3D ball flights fitted with a physics model, and rule-based shot types. Bounce types are "ground" and "wall" only; bandeja and víbora are one class.
-- **Layer 3** is `padex.analysis.movement` and `padex.report`: movement and formation statistics, the HTML match report and the 3D replay.
+- **Layer 1** is `courtshot.tracking`: YOLO + ByteTrack for people, YOLO-Pose, and a fine-tuned TrackNetV3 for the ball. SAM3 is not used. Court calibration is interactive (`courtshot calibrate`); there is no automatic court detection. Team assignment comes from the identity step (near pair = T_1, far pair = T_2 at the seed frame), not from jersey colours.
+- **Layer 2** is `courtshot.analysis`: stable player identities, ball events (hits, floor and wall bounces) found in image space, 3D ball flights fitted with a physics model, and rule-based shot types. Bounce types are "ground" and "wall" only; bandeja and víbora are one class.
+- **Layer 3** is `courtshot.analysis.movement` and `courtshot.report`: movement and formation statistics, the HTML match report and the 3D replay.
 - **Storage**: tracking is cached as a pickle next to the video (`<video>_tracking_cache.pkl`); the videos, their calibration JSONs and caches live in `videos/`; outputs are CSV, JSON and HTML in `output/<video>/`. The Parquet / JSONL match folder of the schema document is not implemented.
-- **Running it**: `uv run python -m padex run <video>` (on this Windows machine the `padex` console script is blocked by Application Control, so use `python -m padex`).
-- **Verifying changes**: the report and replay are deterministic. After a refactor, `python -m padex report` on an existing tracking cache must give byte-identical `summary.json`, `shots.csv`, `ball_events.csv` and `positions.csv`.
+- **Running it**: `uv run python -m courtshot run <video>` (on this Windows machine the `courtshot` console script is blocked by Application Control, so use `python -m courtshot`).
+- **Verifying changes**: the report and replay are deterministic. After a refactor, `python -m courtshot report` on an existing tracking cache must give byte-identical `summary.json`, `shots.csv`, `ball_events.csv` and `positions.csv`.
 
 ## Architecture — Three Layers
 
 The system is organized into three layers, each building on the previous.
 
-### Layer 1: `padex.tracking` — Raw Tracking Engine
+### Layer 1: `courtshot.tracking` — Raw Tracking Engine
 
 CV pipeline that processes broadcast video frame-by-frame.
 
@@ -49,7 +49,7 @@ Key challenges to solve:
 
 Storage: **Parquet** (columnar, efficient for millions of rows at 30fps)
 
-### Layer 2: `padex.events` — Event Detection
+### Layer 2: `courtshot.events` — Event Detection
 
 Derives discrete match events from tracking data. This is where padel domain knowledge lives.
 
@@ -82,7 +82,7 @@ Match hierarchy: match → set → game → point → shot
 
 Storage: **JSONL** for shots/points (streaming, nested structures), **JSON** for match structure
 
-### Layer 3: `padex.tactics` — Analytics & Visualization
+### Layer 3: `courtshot.tactics` — Analytics & Visualization
 
 Computes tactical metrics from layers 1 and 2.
 
@@ -135,16 +135,16 @@ match_20260301_teamA_vs_teamB/
 This is the code as it is (not the target design):
 
 ```
-padex/
+courtshot/
 ├── pyproject.toml
 ├── README.md
 ├── CLAUDE.md
-├── run_match.sh               # `python -m padex run` with a log file
+├── run_match.sh               # `python -m courtshot run` with a log file
 ├── checkpoints/               # fine-tuned TrackNetV3 ball model
 ├── src/
-│   └── padex/
-│       ├── pipeline.py        # Padex: track -> analyse -> outputs
-│       ├── cli.py             # padex calibrate | run | report | replay
+│   └── courtshot/
+│       ├── pipeline.py        # CourtShot: track -> analyse -> outputs
+│       ├── cli.py             # courtshot calibrate | run | report | replay
 │       ├── court.py           # Court model + homography
 │       ├── calibration.py     # Interactive court calibration
 │       ├── weights.py         # YOLO weight download
@@ -179,7 +179,7 @@ padex/
 └── examples/
 ```
 
-`padex.schemas.tracking` and `padex.tracking.pipeline.TrackingResult` are what tracking caches are pickles of: moving or renaming those classes breaks every existing cache.
+`courtshot.schemas.tracking` and `courtshot.tracking.pipeline.TrackingResult` are what tracking caches are pickles of: moving or renaming those classes breaks every existing cache.
 
 ## Development Priorities
 

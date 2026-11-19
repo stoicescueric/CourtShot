@@ -1,6 +1,6 @@
 """
-Tests for padex.analysis.shots (shot types, direction, rally endings, totals)
-and for the report data padex.report.match_report builds from them.
+Tests for courtshot.analysis.shots (shot types, direction, rally endings, totals)
+and for the report data courtshot.report.match_report builds from them.
 """
 
 from __future__ import annotations
@@ -10,11 +10,11 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from padex.analysis import movement
-from padex.analysis import shots as ms
-from padex.analysis.ball_events import BallEvent, BallResult, Shot
-from padex.report import match_report as am
-from padex.schemas.tracking import BoundingBox, PlayerFrame, Position2D
+from courtshot.analysis import movement
+from courtshot.analysis import shots as ms
+from courtshot.analysis.ball_events import BallEvent, BallResult, Shot
+from courtshot.report import match_report as am
+from courtshot.schemas.tracking import BoundingBox, PlayerFrame, Position2D
 
 R = ms.ShotRules()
 TEAMS = {"P_1": "T_1", "P_2": "T_1", "P_3": "T_2", "P_4": "T_2"}

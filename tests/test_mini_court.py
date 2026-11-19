@@ -2,8 +2,8 @@
 
 import numpy as np
 
-from padex.schemas.tracking import BoundingBox, PlayerFrame, Position2D
-from padex.viz.mini_court import MiniCourt
+from courtshot.schemas.tracking import BoundingBox, PlayerFrame, Position2D
+from courtshot.viz.mini_court import MiniCourt
 
 
 def _frame():

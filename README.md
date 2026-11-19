@@ -1,9 +1,7 @@
-# Padex
+# CourtShot
 
-Padex turns a padel match video from one fixed camera into player tracks, a 3D
+CourtShot turns a padel match video from one fixed camera into player tracks, a 3D
 ball path, a list of classified shots, a match report and a 3D replay.
-
-> **padex** = padel + x (analytics/extraction)
 
 ![Four tracked players with pose, the ball, and their positions on the court](docs/images/players.jpg)
 
@@ -16,7 +14,7 @@ uv sync --group dev
 ```
 
 On Windows this installs the CUDA build of PyTorch; a GPU makes tracking many
-times faster. The YOLO weights are downloaded to `~/.padex/weights/` on first
+times faster. The YOLO weights are downloaded to `~/.courtshot/weights/` on first
 use. The fine-tuned ball model is in `checkpoints/padel_tracknetv3.pt`.
 
 ## Use
@@ -26,10 +24,10 @@ Run everything from the repository folder.
 ```bash
 # 1. Once per camera position: click the court keypoints.
 #    Saves videos/match_calibration.json next to the video.
-uv run python -m padex calibrate videos/match.mp4
+uv run python -m courtshot calibrate videos/match.mp4
 
 # 2. Tracking, tracked video, report and 3D replay.
-uv run python -m padex run videos/match.mp4
+uv run python -m courtshot run videos/match.mp4
 ```
 
 Results go to `output/match/`:
@@ -49,19 +47,19 @@ calibration, the ball model and the settings are the same. The report and the
 replay can be made again from that cache alone, without the video or a GPU:
 
 ```bash
-uv run python -m padex report videos/match_tracking_cache.pkl --out output/match
-uv run python -m padex replay videos/match_tracking_cache.pkl --out output/match/scene3d.html
+uv run python -m courtshot report videos/match_tracking_cache.pkl --out output/match
+uv run python -m courtshot replay videos/match_tracking_cache.pkl --out output/match/scene3d.html
 ```
 
-`uv run python -m padex <command> --help` lists the options of each command.
-Where Windows lets it run, the shorter `uv run padex ...` is the same thing.
+`uv run python -m courtshot <command> --help` lists the options of each command.
+Where Windows lets it run, the shorter `uv run courtshot ...` is the same thing.
 
 From Python:
 
 ```python
-from padex import Padex
+from courtshot import CourtShot
 
-p = Padex("videos/match.mp4")
+p = CourtShot("videos/match.mp4")
 p.run()                    # everything, or:
 analysis = p.analyse()     # stable player IDs, ball events, 3D ball flights
 ```
@@ -97,7 +95,7 @@ white boxes can be rerun with other settings without touching the video.
 
 One 3×3 matrix, the homography H, converts any pixel on the court floor into
 court metres. The camera is fixed, so H is fitted once per video, to up to 12
-clicked keypoints (`padex calibrate`).
+clicked keypoints (`courtshot calibrate`).
 
 ```math
 \begin{pmatrix} x' \\ y' \\ w \end{pmatrix} = H \begin{pmatrix} u \\ v \\ 1 \end{pmatrix}, \qquad (x, y) = \left( \frac{x'}{w}, \frac{y'}{w} \right)
@@ -216,9 +214,9 @@ Each module's docstring explains its step in full and lists its thresholds.
 ## Layout
 
 ```
-src/padex/
-  pipeline.py          Padex: track -> analyse -> outputs
-  cli.py               the padex command (calibrate, run, report, replay)
+src/courtshot/
+  pipeline.py          CourtShot: track -> analyse -> outputs
+  cli.py               the courtshot command (calibrate, run, report, replay)
   court.py             court model and homography
   calibration.py       interactive court calibration
   weights.py           download of the YOLO weights
@@ -266,11 +264,11 @@ audio track (an experiment, not used by the pipeline).
 
 | Environment variable | Effect |
 | --- | --- |
-| `PADEX_TRACKER` | Player tracker config: `padex_bytetrack.yaml` (default) or `padex_botsort.yaml`, or a file of your own |
-| `PADEX_FP16=0` | Full precision on the GPU (default: half precision on CUDA) |
-| `PADEX_POSE_CLOSEUPS=1` | Pose from close-ups of the players only: faster, slightly worse for the near players |
-| `PADEX_THREADS=0` | Run the models one after another on one thread |
-| `PADEX_WORKERS` | Processes for the 3D ball fit (default: half the logical CPUs) |
+| `COURTSHOT_TRACKER` | Player tracker config: `courtshot_bytetrack.yaml` (default) or `courtshot_botsort.yaml`, or a file of your own |
+| `COURTSHOT_FP16=0` | Full precision on the GPU (default: half precision on CUDA) |
+| `COURTSHOT_POSE_CLOSEUPS=1` | Pose from close-ups of the players only: faster, slightly worse for the near players |
+| `COURTSHOT_THREADS=0` | Run the models one after another on one thread |
+| `COURTSHOT_WORKERS` | Processes for the 3D ball fit (default: half the logical CPUs) |
 
 ## Development
 

@@ -16,12 +16,12 @@ import types
 
 import pytest
 
-from padex.analysis import ball_events as bt
-from padex.analysis import match
-from padex.pipeline import Padex
-from padex.schemas.tracking import BallFrame, BoundingBox, CourtCalibration
-from padex.tracking import cache as tracking_cache
-from padex.tracking.pipeline import TrackingResult
+from courtshot.analysis import ball_events as bt
+from courtshot.analysis import match
+from courtshot.pipeline import CourtShot
+from courtshot.schemas.tracking import BallFrame, BoundingBox, CourtCalibration
+from courtshot.tracking import cache as tracking_cache
+from courtshot.tracking.pipeline import TrackingResult
 
 
 def _calibration(scale: float = 1.0) -> CourtCalibration:
@@ -38,7 +38,7 @@ def _calibration(scale: float = 1.0) -> CourtCalibration:
 
 
 class TestTrackingCacheKey:
-    def _padex(self, tmp_path, **kwargs) -> Padex:
+    def _courtshot(self, tmp_path, **kwargs) -> CourtShot:
         video = tmp_path / "clip.mp4"
         if not video.exists():
             video.write_bytes(b"not really a video")
@@ -47,54 +47,54 @@ class TestTrackingCacheKey:
             model.write_bytes(b"weights")
         kwargs.setdefault("calibration", _calibration())
         kwargs.setdefault("ball_model_path", model)
-        return Padex(video, **kwargs)
+        return CourtShot(video, **kwargs)
 
-    def _save_cache(self, p: Padex) -> None:
+    def _save_cache(self, p: CourtShot) -> None:
         tracking_cache.save_tracking(TrackingResult(), p.cache_path, p.tracking_key())
 
     def test_same_inputs_reuse_the_cache(self, tmp_path):
-        self._save_cache(self._padex(tmp_path))
-        again = self._padex(tmp_path)
+        self._save_cache(self._courtshot(tmp_path))
+        again = self._courtshot(tmp_path)
         assert isinstance(again.track(), TrackingResult)
         assert again.tracking_from_cache
 
     def test_key_changes_with_each_input(self, tmp_path):
-        base = self._padex(tmp_path).tracking_key()
+        base = self._courtshot(tmp_path).tracking_key()
         other_model = tmp_path / "other_ball.pt"
         other_model.write_bytes(b"weights")
-        assert self._padex(tmp_path, calibration=_calibration(2.0)).tracking_key() != base
-        assert self._padex(tmp_path, ball_model_path=other_model).tracking_key() != base
-        assert self._padex(tmp_path, enable_pose=False).tracking_key() != base
-        assert self._padex(tmp_path, max_players=4).tracking_key() != base
+        assert self._courtshot(tmp_path, calibration=_calibration(2.0)).tracking_key() != base
+        assert self._courtshot(tmp_path, ball_model_path=other_model).tracking_key() != base
+        assert self._courtshot(tmp_path, enable_pose=False).tracking_key() != base
+        assert self._courtshot(tmp_path, max_players=4).tracking_key() != base
 
     def test_key_changes_with_pose_mode(self, tmp_path, monkeypatch):
-        base = self._padex(tmp_path).tracking_key()
-        monkeypatch.setenv("PADEX_POSE_CLOSEUPS", "1")
-        assert self._padex(tmp_path).tracking_key() != base
+        base = self._courtshot(tmp_path).tracking_key()
+        monkeypatch.setenv("COURTSHOT_POSE_CLOSEUPS", "1")
+        assert self._courtshot(tmp_path).tracking_key() != base
 
     def test_retrained_model_under_the_same_name_changes_the_key(self, tmp_path):
-        before = self._padex(tmp_path).tracking_key()
+        before = self._courtshot(tmp_path).tracking_key()
         (tmp_path / "ball.pt").write_bytes(b"other weights")
-        assert self._padex(tmp_path).tracking_key() != before
+        assert self._courtshot(tmp_path).tracking_key() != before
 
     def test_stale_reason_names_what_changed(self, tmp_path):
-        p = self._padex(tmp_path)
+        p = self._courtshot(tmp_path)
         self._save_cache(p)
-        other = self._padex(tmp_path, calibration=_calibration(2.0))
+        other = self._courtshot(tmp_path, calibration=_calibration(2.0))
         reason = tracking_cache.stale_reason(p.cache_path, other.tracking_key())
         assert reason is not None and "calibration_sha1" in reason
         assert tracking_cache.stale_reason(p.cache_path, p.tracking_key()) is None
 
     def test_stale_cache_is_set_aside_not_deleted(self, tmp_path):
-        p = self._padex(tmp_path)
+        p = self._courtshot(tmp_path)
         self._save_cache(p)
-        other = self._padex(tmp_path, calibration=_calibration(2.0))
+        other = self._courtshot(tmp_path, calibration=_calibration(2.0))
         tracking_cache.set_aside_if_stale(other.cache_path, other.tracking_key())
         assert not p.cache_path.exists()
         assert (tmp_path / "clip_tracking_cache.old.pkl").exists()
 
     def test_cache_without_a_key_is_still_used(self, tmp_path):
-        p = self._padex(tmp_path)
+        p = self._courtshot(tmp_path)
         with open(p.cache_path, "wb") as f:
             pickle.dump(TrackingResult(), f)
         assert isinstance(p.track(), TrackingResult)
@@ -104,16 +104,35 @@ class TestTrackingCacheKey:
         video = tmp_path / "clip.mp4"
         video.write_bytes(b"not really a video")
         with pytest.raises(ValueError, match="calibrat"):
-            Padex(video, ball_model_path=video)  # no clip_calibration.json next to it
+            CourtShot(video, ball_model_path=video)  # no clip_calibration.json next to it
         with pytest.raises(FileNotFoundError, match="Ball model"):
-            Padex(video, calibration=_calibration(), ball_model_path=tmp_path / "nope.pt")
+            CourtShot(video, calibration=_calibration(), ball_model_path=tmp_path / "nope.pt")
 
 
 class TestOlderCaches:
+    def test_cache_made_when_the_package_was_called_padex_still_loads(self, tmp_path):
+        frame = BallFrame(frame_id=3, timestamp_ms=120.0, bbox=BoundingBox(x1=1, y1=2, x2=9, y2=10), confidence=0.7)
+        data = pickle.dumps(TrackingResult(ball_frames=[frame], calibration=_calibration()), protocol=0)
+        assert b"courtshot." in data
+        path = tmp_path / "old_tracking_cache.pkl"
+        path.write_bytes(data.replace(b"courtshot.", b"padex."))  # protocol 0 names classes as plain text
+        with pytest.raises(ModuleNotFoundError):
+            pickle.loads(path.read_bytes())
+        loaded = tracking_cache.load_tracking(path)
+        assert isinstance(loaded, TrackingResult) and loaded.ball_frames == [frame]
+        assert loaded.calibration == _calibration()
+
+    def test_key_naming_the_tracker_config_by_its_old_name_still_matches(self, tmp_path):
+        cache = tmp_path / "clip_tracking_cache.pkl"
+        cache.write_bytes(b"tracking")
+        tracking_cache.key_path_for(cache).write_text(json.dumps({"tracker": "padex_bytetrack.yaml"}))
+        assert tracking_cache.stale_reason(cache, {"tracker": "courtshot_bytetrack.yaml"}) is None
+        assert tracking_cache.stale_reason(cache, {"tracker": "courtshot_botsort.yaml"}) is not None
+
     def test_cache_with_the_ball_fields_that_are_gone_still_loads(self, tmp_path, monkeypatch):
         """Tracking caches made before BallFrame lost its floor position and
         visibility state hold instances of two classes that no longer exist."""
-        import padex.schemas.tracking as schema
+        import courtshot.schemas.tracking as schema
 
         class BallVisibility(enum.StrEnum):
             VISIBLE = "visible"
@@ -128,9 +147,9 @@ class TestOlderCaches:
             visibility: BallVisibility = BallVisibility.VISIBLE
 
         for cls in (BallVisibility, Position3D):
-            cls.__module__, cls.__qualname__ = "padex.schemas.tracking", cls.__name__
+            cls.__module__, cls.__qualname__ = "courtshot.schemas.tracking", cls.__name__
             monkeypatch.setattr(schema, cls.__name__, cls, raising=False)
-        OldBallFrame.__module__, OldBallFrame.__qualname__ = "padex.schemas.tracking", "BallFrame"
+        OldBallFrame.__module__, OldBallFrame.__qualname__ = "courtshot.schemas.tracking", "BallFrame"
         new_ball_frame = schema.BallFrame
         monkeypatch.setattr(schema, "BallFrame", OldBallFrame)
 

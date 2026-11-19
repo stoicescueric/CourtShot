@@ -220,7 +220,7 @@ data/
 
 .DS_Store
 
-# Made next to each video by `padex run`: tracking cache, its key, the
+# Made next to each video by `courtshot run`: tracking cache, its key, the
 # appearance vectors and the 3D ball fit (plus copies set aside)
 *_tracking_cache*
 *_calibration_prev.json

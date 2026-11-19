@@ -1,11 +1,11 @@
 """
 Label the ball in your own padel footage, for train_tracknetv3.py.
 
-Usage (from the padex folder):
+Usage (from the repository folder):
 
     uv run python tools/label_ball.py videos/match.mp4 --start 1200 --end 1800 --name rally_01
     uv run python tools/label_ball.py videos/match.mp4 --start 1200 --end 1800 --name rally_01 \
-        --suggest videos/match_tracking_cache.pkl      # pre-fill with Padex's detections
+        --suggest videos/match_tracking_cache.pkl      # pre-fill with CourtShot's detections
 
 It writes data/rally_01/frames/000000.jpg ... and data/rally_01/labels.csv
 (frame,visibility,x,y), the layout train_tracknetv3.py expects. Label one
@@ -69,12 +69,12 @@ def save_labels(path: Path, labels: dict[int, tuple[int, float, float]]) -> None
 
 
 def load_suggestions(cache: Path | None, start: int) -> dict[int, tuple[float, float]]:
-    """Padex's raw ball detections, re-indexed to the clip (frame - start)."""
+    """CourtShot's raw ball detections, re-indexed to the clip (frame - start)."""
     if cache is None:
         return {}
-    from padex.tracking.cache import load_tracking
+    from courtshot.tracking.cache import load_tracking
 
-    tracking = load_tracking(cache)  # your own Padex cache
+    tracking = load_tracking(cache)  # your own CourtShot cache
     return {
         bf.frame_id - start: ((bf.bbox.x1 + bf.bbox.x2) / 2, (bf.bbox.y1 + bf.bbox.y2) / 2)
         for bf in tracking.ball_frames
@@ -238,7 +238,7 @@ def main() -> None:
     ap.add_argument("--end", type=int, required=True, help="frame after the last one (exclusive)")
     ap.add_argument("--name", required=True, help="clip name, e.g. rally_01")
     ap.add_argument("--data", type=Path, default=Path("data"))
-    ap.add_argument("--suggest", type=Path, help="Padex tracking cache to pre-fill ball positions")
+    ap.add_argument("--suggest", type=Path, help="CourtShot tracking cache to pre-fill ball positions")
     args = ap.parse_args()
     if args.end <= args.start:
         raise SystemExit("--end must be greater than --start")

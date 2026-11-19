@@ -1,7 +1,7 @@
 """
 Find which clicked keypoint is hurting your court calibration.
 
-Usage (from the padex folder):
+Usage (from the repository folder):
     uv run python tools/check_calibration.py videos/match_calibration.json
 
 For every point you clicked it shows:
@@ -18,7 +18,7 @@ import sys
 import cv2
 import numpy as np
 
-from padex.court import COURT_MODEL
+from courtshot.court import COURT_MODEL
 
 
 def project(H: np.ndarray, px: np.ndarray) -> np.ndarray:
