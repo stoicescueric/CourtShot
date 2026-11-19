@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from padex.court import (
+from courtshot.court import (
     COURT_MODEL,
     calibration_from_keypoints,
     court_to_pixel,

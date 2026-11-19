@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from padex.analysis import ball_flight as ball3d
-from padex.schemas.tracking import BallFrame, BoundingBox
-from padex.viz.frame import FrameAnnotator
+from courtshot.analysis import ball_flight as ball3d
+from courtshot.schemas.tracking import BallFrame, BoundingBox
+from courtshot.viz.frame import FrameAnnotator
 
 FPS = 25.0
 

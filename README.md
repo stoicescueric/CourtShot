@@ -1,9 +1,9 @@
-# Padex
+# CourtShot
 
-Padex turns a padel match video from one fixed camera into player tracks, a 3D
+CourtShot turns a padel match video from one fixed camera into player tracks, a 3D
 ball path, a list of classified shots, a match report and a 3D replay.
 
-> **padex** = padel + x (analytics/extraction)
+![Four tracked players with pose, the ball, and their positions on the court](docs/images/players.jpg)
 
 ## Setup
 
@@ -14,7 +14,7 @@ uv sync --group dev
 ```
 
 On Windows this installs the CUDA build of PyTorch; a GPU makes tracking many
-times faster. The YOLO weights are downloaded to `~/.padex/weights/` on first
+times faster. The YOLO weights are downloaded to `~/.courtshot/weights/` on first
 use. The fine-tuned ball model is in `checkpoints/padel_tracknetv3.pt`.
 
 ## Use
@@ -24,10 +24,10 @@ Run everything from the repository folder.
 ```bash
 # 1. Once per camera position: click the court keypoints.
 #    Saves videos/match_calibration.json next to the video.
-uv run python -m padex calibrate videos/match.mp4
+uv run python -m courtshot calibrate videos/match.mp4
 
 # 2. Tracking, tracked video, report and 3D replay.
-uv run python -m padex run videos/match.mp4
+uv run python -m courtshot run videos/match.mp4
 ```
 
 Results go to `output/match/`:
@@ -47,50 +47,176 @@ calibration, the ball model and the settings are the same. The report and the
 replay can be made again from that cache alone, without the video or a GPU:
 
 ```bash
-uv run python -m padex report videos/match_tracking_cache.pkl --out output/match
-uv run python -m padex replay videos/match_tracking_cache.pkl --out output/match/scene3d.html
+uv run python -m courtshot report videos/match_tracking_cache.pkl --out output/match
+uv run python -m courtshot replay videos/match_tracking_cache.pkl --out output/match/scene3d.html
 ```
 
-`uv run python -m padex <command> --help` lists the options of each command.
-Where Windows lets it run, the shorter `uv run padex ...` is the same thing.
+`uv run python -m courtshot <command> --help` lists the options of each command.
+Where Windows lets it run, the shorter `uv run courtshot ...` is the same thing.
 
 From Python:
 
 ```python
-from padex import Padex
+from courtshot import CourtShot
 
-p = Padex("videos/match.mp4")
+p = CourtShot("videos/match.mp4")
 p.run()                    # everything, or:
 analysis = p.analyse()     # stable player IDs, ball events, 3D ball flights
 ```
 
 ## How it works
 
-```
-video ─▶ tracking ─────────────▶ analysis ─────────────────────▶ outputs
-         players: YOLO+ByteTrack  identities: 4 stable players    tracked video
-         pose:    YOLO-Pose       ball events: hits and bounces   match report
-         ball:    TrackNetV3      ball flight: 3D physics fit     3D replay
-                                  shots: type, speed, direction
-                                  movement: distance, zones
+Three steps read the video with a neural network; everything after that is
+geometry, physics and padel rules working on their results. The figures below
+come from a 90-second test clip.
+
+```mermaid
+flowchart TD
+    V["<b>Video from one fixed camera</b><br/>plus a one-time court calibration"]
+    P["<b>Player detection and pose</b><br/>YOLO + ByteTrack, YOLO-Pose"]
+    B["<b>Ball detection</b><br/>TrackNetV3 on 8-frame windows"]
+    I["<b>Stable identities P_1 to P_4</b><br/>motion assignment + SigLIP appearance"]
+    E["<b>Ball events</b><br/>arcs in the image: hit, floor, wall"]
+    M["<b>Rallies and movement</b><br/>distance, speed, zones, formations"]
+    F["<b>3D ball flight</b><br/>physics fitted to the 2D detections"]
+    S["<b>Shot types</b><br/>rules on height, speed, apex, pose"]
+    O["<b>Tracked video, match report, 3D replay</b>"]
+    V --> P --> I --> M --> O
+    V --> B --> E --> F --> S --> O
+    I --> E
+    classDef net fill:#e8e8e4,stroke:#888,color:#111
+    class P,B,I net
 ```
 
-1. **Court calibration** maps image pixels to court metres (a homography from up to 12 keypoints).
-2. **Tracking** finds the people, their pose and the ball in every frame.
-3. **Identities** folds the tracker's short-lived IDs into four players, P_1 to P_4, by motion, and checks them against what the players look like.
-4. **Ball events** cleans the ball track and finds hits, floor bounces and wall bounces where the ball's smooth curve in the image breaks.
-5. **Ball flight** fits a physics simulation to every flight between two hits, which gives the ball's height, speed and landing spot from one camera.
-6. **Shots** names each hit (serve, lob, volley, bandeja/víbora, smash, bajada, chiquita, drive) with rules on measured features.
-7. **Movement** measures distance, speed, sprints, net and back time and team formations.
+Grey boxes run a neural network on the video. Their output is cached, so the
+white boxes can be rerun with other settings without touching the video.
 
-Each module's docstring explains its step and lists its thresholds.
+### 1. Court calibration
+
+One 3×3 matrix, the homography H, converts any pixel on the court floor into
+court metres. The camera is fixed, so H is fitted once per video, to up to 12
+clicked keypoints (`courtshot calibrate`).
+
+```math
+\begin{pmatrix} x' \\ y' \\ w \end{pmatrix} = H \begin{pmatrix} u \\ v \\ 1 \end{pmatrix}, \qquad (x, y) = \left( \frac{x'}{w}, \frac{y'}{w} \right)
+```
+
+![Court calibration drawn onto a video frame, next to the court model](docs/images/calibration.jpg)
+
+*The calibration drawn back onto a frame: the 12 keypoints in red, and a grid of 1 m squares on the floor.*
+
+H is only valid on the floor. A player's feet map correctly; a ball in the air
+does not, which shapes the two ball steps below.
+
+### 2. Players: detection, pose and stable identities
+
+YOLO with ByteTrack finds the people, YOLO-Pose gives 17 body keypoints each,
+and the bottom-centre of each box (the feet) is mapped onto the court. Anyone
+more than 1 m outside the court is dropped.
+
+ByteTrack's IDs break at every occlusion and crossing: it gave 15 different IDs
+to the four players in the test clip. The identity step
+(`analysis/identities.py`) folds them into exactly four. It knows what the
+tracker does not: there are four players, two per side, and they move smoothly.
+Each frame it predicts where every player should be and solves the assignment
+of detections to players with the Hungarian algorithm:
+
+```math
+\text{cost} = \lVert p_{\text{det}} - p_{\text{pred}} \rVert \;-\; 0.4\, w_{\text{id}}\,[\text{same tracker ID}] \;+\; 3.0\,[\text{other side of the net}]
+```
+
+Afterwards it checks the result against what the players look like (SigLIP
+embeddings of body crops) and undoes swaps between players who look different.
+
+![A frame with four labelled players, their skeletons and the ball, next to their positions on the court](docs/images/players.jpg)
+
+*One frame after the identity step: boxes, pose, foot points and the ball. The grey box on the left is a fifth detection that the assignment dropped.*
+
+### 3. Ball detection
+
+TrackNetV3 is a U-Net that looks at a background frame plus 8 consecutive
+frames at once and outputs one heatmap per frame. A padel ball is a few blurred
+pixels in broadcast footage; seeing it move is what makes it findable. The
+weights are fine-tuned on padel (see "The ball model" below).
+
+### 4. Ball events: hits, floor bounces, wall bounces
+
+Between two contacts, a ball in flight traces a smooth curve in the image.
+`analysis/ball_events.py` drops stationary detections, links the rest into
+tracklets, and splits each tracklet into arcs that fit a quadratic. Wherever
+one arc ends and another begins, something touched the ball:
+
+| Event | Rule |
+| --- | --- |
+| Hit | The break lies within a player's reach |
+| Floor bounce | The image track gets a sudden upward kick, and the point maps onto the court |
+| Wall bounce | Any other break |
+
+![Ball track over five seconds drawn on a frame, with hits, floor bounces and wall bounces marked](docs/images/ball_events.jpg)
+
+*Five seconds of the ball track. Dots are raw detections and lines the fitted arcs; a marker sits wherever one arc hands over to the next.*
+
+### 5. 3D ball flight from one camera
+
+One camera gives only the direction to the ball, not its distance. But between
+contacts the ball obeys known physics, and only one launch produces a path
+that, seen from the camera, passes through every detection.
+`analysis/ball_flight.py` recovers the full camera from H, then fits a
+simulation with gravity, air drag and bounces off the floor and the glass to
+each flight between two hits:
+
+```math
+\dot{\mathbf{v}} = \mathbf{g} - k\,\lVert \mathbf{v} \rVert\,\mathbf{v}, \qquad k = \frac{\rho\, C_d\, A}{2m} \approx 0.019\ \text{m}^{-1}
+```
+
+![Side view, top view and image reprojection of four fitted 3D ball flights](docs/images/ball_flight.jpg)
+
+*Four consecutive fitted flights from the side and from above. Bottom: the same paths projected back into the image pass through the detections they were fitted to.*
+
+This gives every shot a height, a speed and a landing spot, and the ball speed
+shown on the tracked video.
+
+### 6. Shot types
+
+Each hit is named by a fixed chain of rules on measured features: serve,
+bajada, smash, bandeja/víbora, lob, volley, chiquita, drive
+(`analysis/shots.py`). No classifier is trained.
+
+Whether a shot is an overhead comes from the hitter's pose around the hit
+(`analysis/swing.py`): an arm raised above its shoulder. The same reading rules
+out "hits" by players who stood still while the ball merely passed them in the
+image.
+
+![Two player close-ups with skeletons: one with an arm raised overhead, one swinging low](docs/images/swing.jpg)
+
+*Left: an overhead. Right: a low shot with a fast wrist but no raised arm. Arm raise is measured in torso lengths, so it means the same for near and far players.*
+
+### 7. Rallies, movement and the report
+
+Rallies come from the ball track (or from player movement when the ball is
+seen too rarely). `analysis/movement.py` measures distance, speed, sprints, net
+and back time and team formations; `report/` writes the HTML report, the data
+files and the 3D replay.
+
+![Top-down court views: player paths, and shots drawn from hitter to landing spot by type](docs/images/report.png)
+
+*Left: each player's path over the clip. Right: shots drawn from the hitter to where the ball landed, by type.*
+
+Each module's docstring explains its step in full and lists its thresholds.
+
+### Known limits
+
+- Nothing has been checked against hand-labelled ground truth yet; thresholds were set by eye on two clips.
+- Rallies are split where the ball is missing for 4 s, which fails on edited footage without pauses.
+- Bandeja and víbora are one class; winner and error are guesses from the last flight of a rally.
+- The camera must not move, and calibration is manual.
 
 ## Layout
 
 ```
-src/padex/
-  pipeline.py          Padex: track -> analyse -> outputs
-  cli.py               the padex command (calibrate, run, report, replay)
+src/courtshot/
+  pipeline.py          CourtShot: track -> analyse -> outputs
+  cli.py               the courtshot command (calibrate, run, report, replay)
   court.py             court model and homography
   calibration.py       interactive court calibration
   weights.py           download of the YOLO weights
@@ -138,11 +264,11 @@ audio track (an experiment, not used by the pipeline).
 
 | Environment variable | Effect |
 | --- | --- |
-| `PADEX_TRACKER` | Player tracker config: `padex_bytetrack.yaml` (default) or `padex_botsort.yaml`, or a file of your own |
-| `PADEX_FP16=0` | Full precision on the GPU (default: half precision on CUDA) |
-| `PADEX_POSE_CLOSEUPS=1` | Pose from close-ups of the players only: faster, slightly worse for the near players |
-| `PADEX_THREADS=0` | Run the models one after another on one thread |
-| `PADEX_WORKERS` | Processes for the 3D ball fit (default: half the logical CPUs) |
+| `COURTSHOT_TRACKER` | Player tracker config: `courtshot_bytetrack.yaml` (default) or `courtshot_botsort.yaml`, or a file of your own |
+| `COURTSHOT_FP16=0` | Full precision on the GPU (default: half precision on CUDA) |
+| `COURTSHOT_POSE_CLOSEUPS=1` | Pose from close-ups of the players only: faster, slightly worse for the near players |
+| `COURTSHOT_THREADS=0` | Run the models one after another on one thread |
+| `COURTSHOT_WORKERS` | Processes for the 3D ball fit (default: half the logical CPUs) |
 
 ## Development
 

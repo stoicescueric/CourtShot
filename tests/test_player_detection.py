@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from padex.schemas.tracking import BoundingBox, PoseKeypoint
-from padex.tracking.player import (
+from courtshot.schemas.tracking import BoundingBox, PoseKeypoint
+from courtshot.tracking.player import (
     COCO_KEYPOINT_NAMES,
     PlayerDetector,
     RawDetection,

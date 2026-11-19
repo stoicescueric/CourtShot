@@ -1,14 +1,14 @@
-"""Print the tracker settings Padex actually uses. Run from the padex folder:
+"""Print the tracker settings CourtShot actually uses. Run from the repository folder:
 uv run python tools/check_tracker.py [video]
 """
 
 import sys
 
-import padex.tracking.player as player
-from padex.io.video import VideoReader
-from padex.tracking.player import YoloPersonTracker
+import courtshot.tracking.player as player
+from courtshot.io.video import VideoReader
+from courtshot.tracking.player import YoloPersonTracker
 
-print("padex code loaded from:", player.__file__)
+print("courtshot code loaded from:", player.__file__)
 
 tracker = YoloPersonTracker()
 with VideoReader(sys.argv[1] if len(sys.argv) > 1 else "videos/match.mp4") as r:

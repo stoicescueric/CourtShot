@@ -11,10 +11,10 @@ import pickle
 
 import numpy as np
 
-from padex.analysis import appearance as ap
-from padex.analysis import identities as si
-from padex.schemas.tracking import BoundingBox, PlayerFrame, Position2D
-from padex.tracking.pipeline import TrackingResult
+from courtshot.analysis import appearance as ap
+from courtshot.analysis import identities as si
+from courtshot.schemas.tracking import BoundingBox, PlayerFrame, Position2D
+from courtshot.tracking.pipeline import TrackingResult
 
 FPS = 25.0
 N_FRAMES = 1000  # 40 s

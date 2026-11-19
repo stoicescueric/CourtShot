@@ -1,5 +1,5 @@
 """
-Fine-tune Padex's TrackNetV3 ball detector on padel footage.
+Fine-tune CourtShot's TrackNetV3 ball detector on padel footage.
 
 Training starts from the weights of the original TrackNetV3 project (trained
 on badminton shuttlecocks). Get the original checkpoint:
@@ -8,11 +8,11 @@ on badminton shuttlecocks). Get the original checkpoint:
     unzip, use ckpts/TrackNet_best.pt  (MIT licence)
 
 This script starts from that checkpoint, continues training on labelled padel
-clips, and saves a checkpoint Padex can load:
+clips, and saves a checkpoint CourtShot can load:
 
-    uv run python -m padex run videos/match.mp4 --ball-model checkpoints/padel_tracknetv3.pt
+    uv run python -m courtshot run videos/match.mp4 --ball-model checkpoints/padel_tracknetv3.pt
 
-Input matches Padex's inference exactly: 512x288 BGR frames, a background
+Input matches CourtShot's inference exactly: 512x288 BGR frames, a background
 frame followed by 8 consecutive frames (27 channels), one sigmoid heatmap per
 frame out.
 
@@ -40,7 +40,7 @@ convert_padeltracker100() at the bottom; fill it in once you have seen how the
 download is organised). Your own labelled clips use the same layout.
 
 -----------------------------------------------------------------------------
-Steps (from the padex folder):
+Steps (from the repository folder):
 
   1. uv run python tools/train_tracknetv3.py prepare --data data --cache cache
        Extracts frames at 512x288 as JPEG and a median background per clip.
@@ -63,7 +63,7 @@ Options worth trying once the basics work:
        Train and run at twice the resolution. At 512x288 a ball from a 1080p
        video is only 2-3 pixels wide; at 1024x576 it keeps its shape. About
        4x slower and 4x the memory. The checkpoint remembers its size, so
-       Padex runs it at the right resolution without further settings.
+       CourtShot runs it at the right resolution without further settings.
 
   --occlusion-aug 0.3   (train)
        In that share of training windows, hide the ball in 1-2 frames under
@@ -93,7 +93,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from padex.tracking.ball import BallDetector, build_tracknet_v3
+from courtshot.tracking.ball import BallDetector, build_tracknet_v3
 
 print = functools.partial(builtins.print, flush=True)  # show progress live, even through tee
 
@@ -266,7 +266,7 @@ def target_heatmap(xy: tuple[float, float] | None) -> np.ndarray:
     """Binary disk around the ball (1 inside, 0 outside).
 
     Binary rather than a soft Gaussian, so the network is trained to push the
-    ball region above Padex's fixed 0.5 detection threshold.
+    ball region above CourtShot's fixed 0.5 detection threshold.
     """
     hm = np.zeros((H, W), np.float32)
     if xy is None:
@@ -340,7 +340,7 @@ class BallWindows(Dataset):
         frames = [self._frame(clip, s + i) for i in range(SEQ)]
         targets = [clip.balls.get(s + i) for i in range(SEQ)]
 
-        # Padex uses the first frame it sees as background; the original
+        # CourtShot uses the first frame it sees as background; the original
         # TrackNetV3 uses a median. Train on both so either works.
         if self.train and random.random() < 0.5:
             bg = self._frame(clip, random.randrange(clip.n))
@@ -383,11 +383,11 @@ def pick_device(arg: str | None) -> torch.device:
 
 
 def load_model(path: str | None, rgb_to_bgr: bool | None = None) -> torch.nn.Module:
-    """Build the Padex TrackNetV3 and load weights.
+    """Build the CourtShot TrackNetV3 and load weights.
 
     path:       None for random init; the original TrackNetV3 checkpoint
                 (ckpts/TrackNet_best.pt); or a checkpoint saved by this script.
-    rgb_to_bgr: Padex feeds OpenCV (BGR) frames. The original TrackNetV3
+    rgb_to_bgr: CourtShot feeds OpenCV (BGR) frames. The original TrackNetV3
                 checkpoint (recognisable by its 'param_dict' entry) was
                 trained on RGB (its dataset code loads frames with PIL), so its
                 first layer is reordered to BGR by default.
@@ -406,7 +406,7 @@ def load_model(path: str | None, rgb_to_bgr: bool | None = None) -> torch.nn.Mod
         if pd.get("seq_len", SEQ) != SEQ or pd.get("bg_mode", "concat") != "concat":
             raise SystemExit(
                 f"Checkpoint has seq_len={pd.get('seq_len')}, bg_mode={pd.get('bg_mode')}; "
-                f"Padex needs seq_len={SEQ}, bg_mode=concat (use TrackNet_best.pt)."
+                f"CourtShot needs seq_len={SEQ}, bg_mode=concat (use TrackNet_best.pt)."
             )
     for key in ("model", "model_state_dict", "state_dict"):
         if isinstance(state, dict) and key in state:
@@ -418,7 +418,7 @@ def load_model(path: str | None, rgb_to_bgr: bool | None = None) -> torch.nn.Mod
         w = state[k]
         order = [3 * g + c for g in range(w.shape[1] // 3) for c in (2, 1, 0)]
         state[k] = w[:, order].clone()
-        print("Reordered first-layer input channels RGB -> BGR to match Padex.")
+        print("Reordered first-layer input channels RGB -> BGR to match CourtShot.")
     model.load_state_dict(state)
     print(f"Loaded weights: {path}")
     return model
@@ -432,7 +432,7 @@ def wbce_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
 
 
 def heatmap_to_point(hm: np.ndarray, thr: float, max_area: int) -> tuple[float, float] | None:
-    """Same post-processing as Padex: largest blob above threshold, centroid."""
+    """Same post-processing as CourtShot: largest blob above threshold, centroid."""
     if hm.max() < thr:
         return None
     binary = (hm >= thr).astype(np.uint8)
@@ -448,7 +448,7 @@ def heatmap_to_point(hm: np.ndarray, thr: float, max_area: int) -> tuple[float, 
 
 @torch.no_grad()
 def evaluate(model, loader, clips: list[Clip], device, tol_px: float, limit: int | None = None) -> dict:
-    """Precision / recall / F1 with Padex's post-processing.
+    """Precision / recall / F1 with CourtShot's post-processing.
 
     A detection is correct if within tol_px of the label, measured in the
     clip's ORIGINAL resolution (so tolerance means the same thing for any
@@ -463,7 +463,7 @@ def evaluate(model, loader, clips: list[Clip], device, tol_px: float, limit: int
         if limit is not None and b >= limit:
             break
         out = model(x.to(device)).cpu().numpy()
-        # Padex uses the last channel (newest frame) of each window.
+        # CourtShot uses the last channel (newest frame) of each window.
         for i in range(out.shape[0]):
             clip = clips[int(ci[i])]
             sx, sy = clip.orig_size[0] / W, clip.orig_size[1] / H
@@ -584,7 +584,7 @@ def cmd_train(args) -> None:
 
     if not args.out.exists():
         print("No epoch beat the starting weights; nothing saved as best (see *_last.pt).")
-    print(f"\nUse it with:\n  uv run python -m padex run videos/match.mp4 --ball-model {args.out}")
+    print(f"\nUse it with:\n  uv run python -m courtshot run videos/match.mp4 --ball-model {args.out}")
 
 
 def main() -> None:

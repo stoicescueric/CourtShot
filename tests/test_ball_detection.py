@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from padex.tracking.ball import BALL_BOX_RADIUS, BallDetector
+from courtshot.tracking.ball import BALL_BOX_RADIUS, BallDetector
 
 SHAPE = (576, 1024, 3)  # video frame: twice the network's 512 x 288
 

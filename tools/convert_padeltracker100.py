@@ -17,7 +17,7 @@ file doesn't list. Clips with nothing labelled are not written.
 Frames are written small to save disk; train_tracknetv3.py's prepare step
 then just copies them.
 
-Usage (from the padex folder):
+Usage (from the repository folder):
     uv run python tools/convert_padeltracker100.py --src ptk --out data
     uv run python tools/convert_padeltracker100.py --src ptk --out data --list   # only show what was found
 """

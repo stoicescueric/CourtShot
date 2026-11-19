@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Match report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<style>
+/* CourtShot brand: dark first. Ink background, Graphite cards, Fog text, Mist
+   secondary text; Volt = data series 1 and the one key number, Court Blue =
+   series 2, Clay = errors. Inter 400 / 500 / 600. */
+:root, :root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000000; --card: #1c1c1e; --raise: #2c2c2e; --line: rgba(255,255,255,.09); --line-strong: #3a3a3c;
+  --text: #f5f5f7; --text2: #a1a1a6; --muted: #7c7c82;
+  --t1: #d4f542; --t2: #4d8dff; --t1-soft: rgba(212,245,66,.16); --t2-soft: rgba(77,141,255,.2);
+  --key: #d4f542; --clay: #ff8a65;
+  --court: #111113; --court2: #161618; --court-line: rgba(255,255,255,.6); --court-text: rgba(245,245,247,.6);
+  --accent: #f5f5f7; --accent-text: #000000;
+  --heat1: linear-gradient(90deg, rgba(92,107,0,.35), #8fa71c, #d4f542, #fbffe0);
+  --heat2: linear-gradient(90deg, rgba(36,72,160,.4), #3468d0, #4d8dff, #e3ecff);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f5f7; --card: #ffffff; --raise: #ededf0; --line: rgba(0,0,0,.08); --line-strong: #d2d2d7;
+  --text: #000000; --text2: #55555a; --muted: #86868b;
+  --t1: #5c6b00; --t2: #2f6fe6; --t1-soft: rgba(92,107,0,.12); --t2-soft: rgba(47,111,230,.12);
+  --key: #5c6b00; --clay: #c8502a;
+  --court: #f5f5f7; --court2: #efeff2; --court-line: rgba(0,0,0,.38); --court-text: rgba(0,0,0,.5);
+  --accent: #000000; --accent-text: #f5f5f7;
+  --heat1: linear-gradient(90deg, rgba(212,245,66,.35), #c3e230, #93aa14, #5c6b00);
+  --heat2: linear-gradient(90deg, rgba(160,196,255,.45), #7daeff, #4d8dff, #1746b4);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 400 15px/1.5 Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased; font-feature-settings: "cv11", "ss01";
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px 96px; }
+
+/* header: lockup, then the match name in display type */
+.brandbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0 0; }
+.lockup { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 22px; letter-spacing: -.035em; color: var(--text); min-width: 120px; }
+.lockup svg { width: 30px; height: 30px; flex: none; }
+header.top { padding: 44px 0 20px; display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: flex-end; justify-content: space-between; }
+.eyebrow { font-size: 13px; color: var(--text2); font-weight: 500; }
+h1 { font-size: clamp(36px, 6vw, 56px); line-height: 1.05; margin: 6px 0 10px; font-weight: 600; letter-spacing: -.035em; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--text2); font-size: 15px; }
+.sides { display: flex; gap: 8px; flex-wrap: wrap; }
+.side { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line-strong); border-radius: 999px; padding: 8px 14px 8px 12px; font-weight: 500; font-size: 14px; }
+.side small { color: var(--muted); font-weight: 400; }
+
+/* identity marks: colour AND shape. T_1 round, T_2 square; the second player of a pair is hollow */
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.T_1 { background: var(--t1); } .dot.T_2 { background: var(--t2); border-radius: 2.5px; }
+.dot.ring { background: transparent !important; border: 2px solid; }
+.dot.ring.T_1 { border-color: var(--t1); } .dot.ring.T_2 { border-color: var(--t2); }
+.who { display: inline-flex; align-items: center; gap: 7px; }
+
+nav.tabs { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 72%, transparent); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+  display: flex; gap: 2px; padding: 10px 0; margin-bottom: 4px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+nav.tabs button, .seg button, .theme {
+  font: inherit; font-size: 14px; color: var(--text2); background: transparent; border: 0; border-radius: 999px; padding: 8px 16px; cursor: pointer; white-space: nowrap; font-weight: 500;
+  transition: background .15s, color .15s;
+}
+nav.tabs button:hover, .seg button:hover, .theme:hover { color: var(--text); }
+nav.tabs button[aria-selected="true"], .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+nav.tabs .spacer { flex: 1; }
+.theme { border: 1px solid var(--line-strong); }
+button:focus-visible, select:focus-visible { outline: 2px solid var(--t2); outline-offset: 2px; }
+
+section.page { display: none; } section.page.on { display: block; animation: rise .25s ease-out; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { section.page.on { animation: none; } }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(12, minmax(0, 1fr)); margin-top: 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 24px 26px 26px; grid-column: span 12; min-width: 0; }
+.c3 { grid-column: span 3; } .c4 { grid-column: span 4; } .c5 { grid-column: span 5; } .c6 { grid-column: span 6; } .c7 { grid-column: span 7; } .c8 { grid-column: span 8; }
+@media (max-width: 900px) { .c3 { grid-column: span 6; } .c4, .c5, .c6, .c7, .c8 { grid-column: span 12; } .card { padding: 20px; border-radius: 20px; } }
+@media (max-width: 520px) { .c3 { grid-column: span 12; } }
+.card h2 { font-size: 19px; margin: 0 0 4px; font-weight: 600; letter-spacing: -.02em; }
+.card .sub { color: var(--text2); font-size: 13.5px; margin: 0 0 18px; max-width: 68ch; }
+.note { color: var(--text2); font-size: 15px; line-height: 1.55; }
+
+/* match summary: stat numerals, one of them the key number */
+.hero { margin-top: 16px; }
+.hero-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 26px; }
+.hero-head h2 { font-size: 22px; margin: 0; display: flex; align-items: center; gap: 12px; }
+.hero-head h2 svg { width: 30px; height: 30px; }
+.chip { font-size: 12.5px; color: var(--text2); border: 1px solid var(--line-strong); border-radius: 999px; padding: 4px 12px; white-space: nowrap; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 26px 20px; }
+.stat .k { color: var(--text2); font-size: 13.5px; }
+.stat .v { font-size: 44px; line-height: 1.1; font-weight: 600; letter-spacing: -.035em; font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; }
+.stat .v small { font-size: 17px; font-weight: 400; letter-spacing: 0; color: var(--text2); margin-left: 6px; }
+.stat.key .v { color: var(--key); }
+.stat .s { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+
+/* team comparison rows */
+.cmp-head { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; font-weight: 600; margin-bottom: 8px; }
+.cmp-head div:last-child { text-align: right; }
+.cmp { padding: 11px 0; border-top: 1px solid var(--line); }
+.cmp .vals { display: grid; grid-template-columns: 112px 1fr 112px; align-items: center; }
+.cmp .vals .lab { text-align: center; color: var(--text2); font-size: 14px; }
+.cmp .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+.cmp .v.r { text-align: right; }
+.cmp .v span { display: inline-block; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
+.cmp .v.lead.T_1 span { background: var(--t1-soft); } .cmp .v.lead.T_2 span { background: var(--t2-soft); }
+.cmp .bars { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; margin-top: 7px; }
+.cmp .bars div { height: 4px; background: var(--raise); border-radius: 4px; position: relative; overflow: hidden; }
+.cmp .bars i { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.cmp .bars div:first-child i { right: 0; background: var(--t1); } .cmp .bars div:last-child i { left: 0; background: var(--t2); }
+
+/* bar lists and stat lists */
+.bl { display: grid; grid-template-columns: minmax(84px, max-content) 1fr max-content; gap: 10px 12px; align-items: center; }
+.bl .k { color: var(--text2); font-size: 14px; }
+.bl .track { height: 6px; background: var(--raise); border-radius: 4px; overflow: hidden; }
+.bl .track i { display: block; height: 100%; border-radius: 4px; min-width: 2px; }
+.bl .n { font-weight: 600; font-variant-numeric: tabular-nums; font-size: 14px; text-align: right; }
+.bl .n small { color: var(--muted); font-weight: 400; margin-left: 5px; }
+.fill.T_1 { background: var(--t1); } .fill.T_2 { background: var(--t2); }
+.sl { display: grid; grid-template-columns: 1fr auto; }
+.sl > div { padding: 11px 0; border-top: 1px solid var(--line); }
+.sl > div:nth-child(-n+2) { border-top: 0; padding-top: 2px; }
+.sl .k { color: var(--text2); } .sl .n { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.sl .n small { color: var(--muted); font-weight: 400; }
+
+/* mirrored shot-type bars */
+.mir { display: grid; grid-template-columns: 30px 1fr minmax(104px, max-content) 1fr 30px; gap: 12px 10px; align-items: center; }
+.mir .lab { text-align: center; color: var(--text2); font-size: 14px; }
+.mir .n { font-weight: 600; font-variant-numeric: tabular-nums; } .mir .n.r { text-align: right; }
+.mir .track { height: 6px; background: var(--raise); border-radius: 4px; position: relative; overflow: hidden; }
+.mir .track i { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.mir .track.l i { right: 0; background: var(--t1); } .mir .track.r i { left: 0; background: var(--t2); }
+
+/* heatmaps */
+.heat { position: relative; width: 100%; aspect-ratio: 1 / 1; border-radius: 16px; overflow: hidden; background: var(--court); border: 1px solid var(--line); }
+.heat canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.heat .tag { position: absolute; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--court-text); font-weight: 500; pointer-events: none; }
+.heat .tag.net { top: 9px; } .heat .tag.back { bottom: 8px; }
+.scales { display: flex; flex-wrap: wrap; gap: 8px 28px; margin-top: 16px; }
+.scale { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; }
+.scale i { width: 120px; height: 6px; border-radius: 4px; }
+.scale i.T_1 { background: var(--heat1); } .scale i.T_2 { background: var(--heat2); }
+.minis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 760px) { .minis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mini { cursor: pointer; border: 0; background: none; padding: 0; text-align: left; font: inherit; color: inherit; border-radius: 16px; }
+.mini .name { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 10px; }
+.mini .name small { color: var(--muted); font-weight: 400; margin-left: auto; font-size: 12.5px; }
+.mini .heat { transition: transform .2s ease; } .mini:hover .heat { transform: scale(1.015); }
+
+.seg { display: flex; gap: 2px; flex-wrap: wrap; background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 4px; width: fit-content; max-width: 100%; }
+.seg button { display: inline-flex; align-items: center; gap: 8px; }
+.seg button[aria-pressed="true"] .dot { background: var(--accent-text); }
+.seg button[aria-pressed="true"] .dot.ring { border-color: var(--accent-text); }
+.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
+select { font: inherit; font-size: 14px; font-weight: 500; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 11px 16px; }
+
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { fill: var(--muted); font-size: 11px; font-family: inherit; }
+.court-bg { fill: var(--court); } .court-ln { stroke: var(--court-line); fill: none; }
+.shot { cursor: pointer; transition: opacity .12s; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--text2); font-size: 13px; margin-top: 14px; align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+
+.scroll { overflow: auto; max-height: 560px; border-radius: 14px; border: 1px solid var(--line); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 11px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+th { position: sticky; top: 0; background: var(--card); color: var(--muted); font-weight: 500; font-size: 12.5px; z-index: 1; }
+td.l, th.l { text-align: left; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: var(--raise); }
+
+#tip { position: fixed; z-index: 20; pointer-events: none; background: var(--accent); color: var(--accent-text); border-radius: 12px; padding: 9px 12px; font-size: 13px; line-height: 1.4; max-width: 270px; opacity: 0; transition: opacity .1s; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+#tip b { display: block; font-weight: 600; } #tip.on { opacity: 1; }
+.about dl { display: grid; grid-template-columns: max-content 1fr; gap: 12px 24px; margin: 0; max-width: 100ch; } .about dt { font-weight: 600; } .about dd { margin: 0; color: var(--text2); }
+@media (max-width: 640px) { .about dl { grid-template-columns: 1fr; gap: 2px; } .about dd { margin-bottom: 12px; } }
+.empty { color: var(--muted); padding: 18px 0; }
+footer { color: var(--muted); font-size: 12.5px; margin-top: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brandbar">
+    <span class="lockup" id="lockup" aria-label="CourtShot"></span>
+  </div>
+  <header class="top">
+    <div>
+      <div class="eyebrow">Match report</div>
+      <h1 id="title"></h1>
+      <div class="meta" id="meta"></div>
+    </div>
+    <div class="sides" id="sides"></div>
+  </header>
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+  <section class="page" id="p-overview"></section>
+  <section class="page" id="p-players"></section>
+  <section class="page" id="p-shots"></section>
+  <section class="page" id="p-rallies"></section>
+  <section class="page about" id="p-about"></section>
+  <footer>CourtShot · tracking and statistics</footer>
+</div>
+<div id="tip" role="status"></div>
+<script>
+const D = /*REPORT_DATA*/null;
+
+// ---------------------------------------------------------------- helpers
+function h(tag, attrs, ...kids) {
+  const svgTags = ["svg", "g", "line", "rect", "circle", "path", "text", "polyline"];
+  const el = svgTags.includes(tag) ? document.createElementNS("http://www.w3.org/2000/svg", tag) : document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.setAttribute("class", v);
+    else if (k === "html") el.innerHTML = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(kid));
+  return el;
+}
+const has = v => v !== null && v !== undefined && !Number.isNaN(v);
+const num = (v, d = 0, unit = "") => has(v) ? v.toFixed(d) + unit : "–";
+const pct = v => has(v) ? Math.round(100 * v) + "%" : "–";
+const kmh = ms => has(ms) ? ms * 3.6 : null;
+function clock(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+function dur(s) { return s >= 90 ? (s / 60).toFixed(1) + " min" : Math.round(s) + " s"; }
+const teamOf = id => D.players.find(p => p.id === id)?.team;
+const isSecond = id => { const p = D.players.find(q => q.id === id); return p && D.players.filter(q => q.team === p.team).indexOf(p) === 1; };
+const dot = id => h("i", { class: "dot " + teamOf(id) + (isSecond(id) ? " ring" : "") });
+const who = id => h("span", { class: "who" }, dot(id), id);
+// The simplified CourtShot mark: a ball's arc, three points, and the ball (the only Volt element).
+function logo() {
+  const svg = h("svg", { viewBox: "0 0 100 100", role: "img", "aria-label": "CourtShot" });
+  svg.innerHTML = `<defs><linearGradient id="cs-tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c2c2e"/><stop offset="1" stop-color="#000"/></linearGradient></defs>
+    <rect x="1" y="1" width="98" height="98" rx="23" fill="url(#cs-tile)" stroke="rgba(255,255,255,.14)" stroke-width="1.5"/>
+    <path d="M24 80 C32 44 44 26 57 27 C64 28 70 38 75 55" fill="none" stroke="rgba(255,255,255,.34)" stroke-width="3.2" stroke-linecap="round"/>
+    <circle cx="43" cy="36" r="4" fill="#a1a1a6"/><circle cx="57" cy="27" r="4.6" fill="#e5e5ea"/><circle cx="68" cy="37" r="5.2" fill="#fff"/>
+    <circle cx="75" cy="56" r="9.5" fill="#d4f542"/>`;
+  return svg;
+}
+// A data mark in a team's colour and shape (T_1 round, T_2 square), filled or hollow.
+function mark(x, y, r, team, filled, ring = "var(--card)") {
+  const c = `var(--${team === "T_1" ? "t1" : "t2"})`, a = { fill: filled ? c : ring, stroke: filled ? ring : c, "stroke-width": filled ? 1.5 : 2 };
+  return team === "T_1" ? h("circle", { cx: x, cy: y, r, ...a }) : h("rect", { x: x - r * .9, y: y - r * .9, width: r * 1.8, height: r * 1.8, rx: r * .3, ...a });
+}
+const label = t => D.shot_labels[t] || t;
+
+const tip = document.getElementById("tip");
+function showTip(ev, html) {
+  tip.innerHTML = html; tip.classList.add("on");
+  const pad = 14, r = tip.getBoundingClientRect();
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - pad;
+  tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+}
+const hideTip = () => tip.classList.remove("on");
+const tipOn = (el, fn) => { el.addEventListener("mousemove", ev => showTip(ev, fn(ev))); el.addEventListener("mouseleave", hideTip); return el; };
+
+function card(cls, title, sub, ...kids) {
+  return h("div", { class: "card " + (cls || "") }, title && h("h2", {}, title), sub && h("p", { class: "sub" }, sub), kids);
+}
+function barList(rows, team) {
+  const max = Math.max(1, ...rows.map(r => r.value || 0));
+  return h("div", { class: "bl" }, rows.map(r => [
+    h("div", { class: "k" }, r.label),
+    h("div", { class: "track" }, h("i", { class: "fill " + team, style: `width:${100 * (r.value || 0) / max}%` })),
+    h("div", { class: "n" }, r.text ?? String(r.value), r.note && h("small", {}, r.note)),
+  ]));
+}
+function statList(rows) {
+  return h("div", { class: "sl" }, rows.filter(Boolean).map(([k, v, small]) => [h("div", { class: "k" }, k), h("div", { class: "n" }, v, small && h("small", {}, " " + small))]));
+}
+function shareRows(obj, order, names) {
+  const total = order.reduce((a, k) => a + (obj?.[k] || 0), 0);
+  return order.map(k => ({ label: names[k], value: obj?.[k] || 0, text: total ? Math.round(100 * (obj[k] || 0) / total) + "%" : "–", note: String(obj?.[k] || 0) }));
+}
+
+// ---------------------------------------------------------------- heatmap
+// One hue per team, from barely there to the busiest spot. Dark theme: deep -> bright -> near white.
+// Light theme the other way round: pale -> deep.
+const RAMPS = {
+  dark: { T_1: [[0, [92, 107, 0, 0]], [0.14, [100, 118, 4, 150]], [0.55, [212, 245, 66, 228]], [1, [251, 255, 224, 250]]],
+          T_2: [[0, [36, 72, 160, 0]], [0.14, [40, 84, 186, 160]], [0.55, [77, 141, 255, 230]], [1, [227, 236, 255, 250]]] },
+  light: { T_1: [[0, [212, 245, 66, 0]], [0.14, [205, 238, 60, 150]], [0.6, [147, 170, 20, 225]], [1, [92, 107, 0, 248]]],
+           T_2: [[0, [160, 196, 255, 0]], [0.14, [150, 190, 255, 160]], [0.6, [77, 141, 255, 228]], [1, [23, 70, 180, 248]]] },
+};
+function ramp(stops, t) {
+  t = Math.min(1, Math.max(0, t));
+  for (let i = 1; i < stops.length; i++) if (t <= stops[i][0]) {
+    const [a, ca] = stops[i - 1], [b, cb] = stops[i], k = (t - a) / (b - a);
+    return ca.map((v, j) => v + (cb[j] - v) * k);
+  }
+  return stops[stops.length - 1][1];
+}
+function blur(grid, sigma) {
+  const n = grid.length, m = grid[0].length, r = Math.ceil(3 * sigma), k = [];
+  for (let i = -r; i <= r; i++) k.push(Math.exp(-0.5 * (i / sigma) ** 2));
+  const ks = k.reduce((a, b) => a + b, 0);
+  const pass = (src, horiz) => src.map((row, y) => row.map((_, x) => {
+    let s = 0;
+    for (let i = -r; i <= r; i++) { const yy = horiz ? y : y + i, xx = horiz ? x + i : x; if (yy >= 0 && yy < n && xx >= 0 && xx < m) s += src[yy][xx] * k[i + r]; }
+    return s / ks;
+  }));
+  return pass(pass(grid, true), false);
+}
+function heatmap(player, opts = {}) {
+  redraws.length = Math.min(redraws.length, 64);
+  const box = h("div", { class: "heat" });
+  const canvas = h("canvas"); box.append(canvas, !opts.mini && h("span", { class: "tag net" }, "Net"), !opts.mini && h("span", { class: "tag back" }, "Back wall"));
+  const n = player.heat.length, smooth = blur(player.heat, n / 16);
+  const peak = Math.max(...smooth.flat());
+  const total = player.heat.flat().reduce((a, b) => a + b, 0);
+  function draw() {
+    const w = box.clientWidth || 300, dpr = Math.min(2, devicePixelRatio || 1);
+    canvas.width = canvas.height = Math.round(w * dpr);
+    const g = canvas.getContext("2d"), W = canvas.width, css = getComputedStyle(document.documentElement);
+    const stops = RAMPS[document.documentElement.dataset.theme === "light" ? "light" : "dark"][player.team];
+    // court: faint bands, like a mown pitch
+    for (let i = 0; i < 5; i++) { g.fillStyle = css.getPropertyValue(i % 2 ? "--court2" : "--court"); g.fillRect(0, i * W / 5, W, W / 5 + 1); }
+    if (peak > 0) {
+      const off = document.createElement("canvas"); off.width = off.height = n;
+      const og = off.getContext("2d"), img = og.createImageData(n, n);
+      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+        const c = ramp(stops, Math.pow(smooth[y][x] / peak, 0.8)), i = 4 * (y * n + x);
+        img.data[i] = c[0]; img.data[i + 1] = c[1]; img.data[i + 2] = c[2]; img.data[i + 3] = c[3];
+      }
+      og.putImageData(img, 0, 0);
+      g.imageSmoothingEnabled = true; g.imageSmoothingQuality = "high"; g.drawImage(off, 0, 0, W, W);
+    }
+    // lines: net (top), walls, service line, centre line from the net to the service line
+    g.strokeStyle = css.getPropertyValue("--court-line"); g.lineWidth = Math.max(1, W / 300);
+    const m = g.lineWidth, sy = D.settings.service_line / 10 * W;
+    g.strokeRect(m, m, W - 2 * m, W - 2 * m);
+    g.beginPath(); g.moveTo(m, sy); g.lineTo(W - m, sy); g.moveTo(W / 2, m); g.lineTo(W / 2, sy); g.stroke();
+    g.lineWidth = m * 3; g.beginPath(); g.moveTo(0, m * 1.5); g.lineTo(W, m * 1.5); g.stroke();
+  }
+  new ResizeObserver(draw).observe(box); redraws.push(draw);
+  if (!opts.mini) tipOn(box, ev => {
+    const r = box.getBoundingClientRect(), cx = Math.floor((ev.clientX - r.left) / r.width * n), cy = Math.floor((ev.clientY - r.top) / r.height * n);
+    const half = Math.round(n / 20);   // +- 0.5 m: a 1 m square around the pointer
+    let s = 0;
+    for (let y = cy - half; y < cy + half; y++) for (let x = cx - half; x < cx + half; x++) if (player.heat[y]?.[x]) s += player.heat[y][x];
+    const depth = (ev.clientY - r.top) / r.height * 10, lat = (ev.clientX - r.left) / r.width * 10;
+    return `<b>${total ? (100 * s / total).toFixed(1) : 0}% of rally time</b>within this 1 m square · ${depth.toFixed(1)} m from the net, ${lat < 5 ? "left" : "right"} side`;
+  });
+  return box;
+}
+const redraws = [];
+const heatScale = (...teams) => h("div", { class: "scales" }, teams.map(t => h("div", { class: "scale" },
+  teams.length > 1 && h("span", { class: "dot " + t }), "Less time", h("i", { class: t }), "More time")));
+
+// ---------------------------------------------------------------- overview
+function cmpRow(labelText, a, b, fmt, opts = {}) {
+  const fa = fmt(a), fb = fmt(b), max = Math.max(a || 0, b || 0, 1e-9);
+  const lead = !has(a) || !has(b) || a === b ? null : (a > b) !== !!opts.lowerLeads ? 0 : 1;
+  return h("div", { class: "cmp" },
+    h("div", { class: "vals" },
+      h("div", { class: "v T_1" + (lead === 0 ? " lead" : "") }, h("span", {}, fa)),
+      h("div", { class: "lab" }, labelText),
+      h("div", { class: "v r T_2" + (lead === 1 ? " lead" : "") }, h("span", {}, fb))),
+    h("div", { class: "bars" }, h("div", {}, h("i", { style: `width:${100 * (a || 0) / max}%` })), h("div", {}, h("i", { style: `width:${100 * (b || 0) / max}%` }))));
+}
+function overview() {
+  const page = document.getElementById("p-overview"), [A, B] = D.teams, m = D.match;
+  const mv = D.movement_rallies, inPlay = m ? m.time_in_play_s : mv.reduce((a, r) => a + r.duration_s, 0);
+  // Headline numbers are the ones the tracking is surest of; single-shot speeds are not among them.
+  const metres = D.players.reduce((a, p) => a + (p.move.distance_m || 0), 0);
+  const stat = (k, v, unit, sub, key) => h("div", { class: "stat" + (key ? " key" : "") }, h("div", { class: "k" }, k),
+    h("div", { class: "v" }, v, unit && h("small", {}, unit)), sub && h("div", { class: "s" }, sub));
+  const mins = inPlay >= 90;
+  page.append(h("div", { class: "card hero" },
+    h("div", { class: "hero-head" }, h("h2", {}, logo(), "Match summary"), h("span", { class: "chip" }, "Rallies from the " + D.settings.rally_source)),
+    h("div", { class: "stats" },
+      m ? stat("Longest rally", String(m.longest_rally_shots ?? "–"), "shots", dur(m.longest_rally_s || 0), true)
+        : stat("Rallies", String(mv.length), null, null, true),
+      stat("Time in play", mins ? (inPlay / 60).toFixed(1) : String(Math.round(inPlay)), mins ? "min" : "s", pct(inPlay / D.duration_s) + " of the video"),
+      m && stat("Rallies", String(m.rallies), null, num(m.avg_rally_shots, m.rallies > 1 ? 1 : 0) + " shots on average"),
+      stat("Distance covered", metres >= 1000 ? (metres / 1000).toFixed(1) : String(Math.round(metres)), metres >= 1000 ? "km" : "m", "all four players"),
+      m && stat("Shots", String(m.shots), null, "ball seen in " + pct(D.quality.ball_coverage) + " of frames"))));
+
+  const grid = h("div", { class: "grid" }); page.append(grid);
+  const sum = (t, f) => t.players.reduce((a, id) => a + (f(D.players.find(p => p.id === id)) || 0), 0);
+  const types = t => t.shots?.by_type || {};
+  const rows = [];
+  if (A.shots) rows.push(
+    cmpRow("Shots", A.shots.shots, B.shots.shots, v => num(v)),
+    cmpRow("Attacking shots", A.shots.attacking_share, B.shots.attacking_share, pct),
+    cmpRow("Average shot speed", A.shots.avg_speed_kmh, B.shots.avg_speed_kmh, v => num(v, 0, " km/h")),
+    cmpRow("Fastest shot", A.shots.max_speed_kmh, B.shots.max_speed_kmh, v => num(v, 0, " km/h")),
+    cmpRow("Overheads", (types(A).smash || 0) + (types(A).bandeja_vibora || 0), (types(B).smash || 0) + (types(B).bandeja_vibora || 0), v => num(v)),
+    cmpRow("Lobs", types(A).lob || 0, types(B).lob || 0, v => num(v)));
+  if (A.shots && (A.shots.winners + A.shots.errors + B.shots.winners + B.shots.errors) > 0) rows.push(
+    cmpRow("Winners", A.shots.winners, B.shots.winners, v => num(v)),
+    cmpRow("Errors", A.shots.errors, B.shots.errors, v => num(v), { lowerLeads: true }));
+  rows.push(
+    cmpRow("Both players at the net", A.move.both_at_net, B.move.both_at_net, pct),
+    cmpRow("Both players at the back", A.move.both_at_back, B.move.both_at_back, pct, { lowerLeads: true }),
+    cmpRow("Distance covered", sum(A, p => p.move.distance_m), sum(B, p => p.move.distance_m), v => num(v, 0, " m")),
+    cmpRow("Net regained", A.move.net_regained, B.move.net_regained, v => num(v)));
+  const head = t => h("span", { class: "who" }, h("i", { class: "dot " + t.id }), t.players.join(" · "));
+  grid.append(card("c6", "Team comparison", "Shots from the ball track; positions during rallies only.",
+    h("div", { class: "cmp-head" }, h("div", {}, head(A)), h("div", {}), h("div", {}, head(B))), rows));
+
+  if (A.shots) {
+    const order = D.shot_types.filter(t => (types(A)[t] || 0) + (types(B)[t] || 0) > 0);
+    const max = Math.max(1, ...order.map(t => Math.max(types(A)[t] || 0, types(B)[t] || 0)));
+    grid.append(card("c6", "Shot types", "How many of each shot the two teams played. Types are estimated by rules (see About the numbers).",
+      h("div", { class: "cmp-head" }, h("div", {}, head(A)), h("div", {}), h("div", {}, head(B))),
+      h("div", { class: "mir" }, order.map(t => [
+        h("div", { class: "n" }, String(types(A)[t] || 0)),
+        h("div", { class: "track l" }, h("i", { style: `width:${100 * (types(A)[t] || 0) / max}%` })),
+        h("div", { class: "lab" }, label(t)),
+        h("div", { class: "track r" }, h("i", { style: `width:${100 * (types(B)[t] || 0) / max}%` })),
+        h("div", { class: "n r" }, String(types(B)[t] || 0))]))));
+  }
+
+  grid.append(card("", "Where each player plays", "Share of rally time, seen from behind each player: their own half, net at the top. Select a player for the details.",
+    h("div", { class: "minis" }, D.players.map(p => h("button", { class: "mini", onclick: () => { state.player = p.id; go("players"); } },
+      h("div", { class: "name" }, dot(p.id), p.id, h("small", {}, pct(p.move.time_at_net) + " at net")), heatmap(p, { mini: true })))),
+    heatScale(...D.teams.map(t => t.id))));
+  grid.append(card("", "Match timeline", D.shots.length ? "Every shot, by player. Shaded bands are rallies." : "Shaded bands are rallies.", timeline()));
+}
+
+function timeline() {
+  const W = 1000, lane = 26, top = 8, left = 44, H = top + lane * 4 + 26, T = Math.max(1, D.duration_s);
+  const x = t => left + (t - D.t0) / T * (W - left - 8);
+  const svg = h("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Shots over time by player" });
+  const bands = D.rallies || D.movement_rallies;
+  for (const r of bands) svg.append(h("rect", { x: x(r.start_s), y: top, width: Math.max(1, x(r.end_s) - x(r.start_s)), height: lane * 4, fill: "var(--raise)", rx: 4 }));
+  D.players.forEach((p, i) => {
+    const y = top + lane * i + lane / 2;
+    svg.append(h("line", { x1: left, x2: W - 8, y1: y, y2: y, stroke: "var(--line)" }), h("text", { x: 0, y: y + 4, style: "fill:var(--text2);font-weight:600" }, p.id));
+  });
+  const step = T > 600 ? 120 : T > 240 ? 60 : T > 90 ? 30 : 10;
+  for (let t = 0; t <= T; t += step) svg.append(h("text", { x: x(D.t0 + t), y: H - 4, "text-anchor": "middle" }, clock(t)));
+  for (const s of D.shots) {
+    const i = D.players.findIndex(p => p.id === s.player), y = top + lane * i + lane / 2;
+    const g = h("g", { class: "shot" },
+      h("circle", { cx: x(s.time_s), cy: y, r: 11, fill: "transparent" }),
+      mark(x(s.time_s), y, s.attacking ? 5 : 4.2, s.team, s.attacking));
+    svg.append(tipOn(g, () => shotTip(s)));
+  }
+  return h("div", {}, svg, D.shots.length ? h("div", { class: "legend" },
+    D.teams.map(t => h("span", {}, h("i", { class: "dot " + t.id }), t.players.join(" · "))),
+    h("span", {}, "Filled: attacking shot (" + D.attacking_types.map(label).join(", ").toLowerCase() + ")"),
+    h("span", {}, "Hollow: other shot")) : null);
+}
+function shotTip(s) {
+  const bits = [has(s.speed_kmh) && Math.round(s.speed_kmh) + " km/h", has(s.contact_height_m) && "contact at " + s.contact_height_m.toFixed(1) + " m",
+    s.direction && ({ cross: "cross-court", line: "down the line", middle: "down the middle" })[s.direction], s.target && "to " + s.target].filter(Boolean);
+  return `<b>${s.player} · ${label(s.type)}</b>${clock(s.time_s - D.t0)}${bits.length ? " · " + bits.join(" · ") : ""}`;
+}
+
+// ---------------------------------------------------------------- players
+const state = { player: D.players[0].id, mapPlayer: "all", mapType: "all" };
+function players() {
+  const page = document.getElementById("p-players"); page.replaceChildren();
+  page.append(h("div", { class: "filters" }, h("div", { class: "seg", role: "group", "aria-label": "Player" }, D.players.map(p =>
+    h("button", { "aria-pressed": String(p.id === state.player), onclick: () => { state.player = p.id; players(); } }, dot(p.id), p.id)))));
+  const p = D.players.find(q => q.id === state.player), mv = p.move, sh = p.shots, team = p.team;
+  const mate = D.players.find(q => q.team === team && q.id !== p.id);
+  const grid = h("div", { class: "grid" }); page.append(grid);
+  grid.append(card("c5", "Heatmap", `Where ${p.id} stood during rallies: own half, net at the top, ${p.id}'s left on the left.`, heatmap(p), heatScale(team)));
+  grid.append(card("c7", "Movement", `${team}, with ${mate ? mate.id : "–"}. Tracked in ${pct(mv.tracked)} of frames.`,
+    statList([
+      ["Distance covered", num(mv.distance_m, 0, " m"), has(mv.distance_in_rallies_m) && `(${num(mv.distance_in_rallies_m, 0)} m in rallies)`],
+      ["Top speed", num(kmh(mv.top_speed_ms), 1, " km/h")],
+      ["Sprints", String(mv.sprints), `over ${num(kmh(D.settings.sprint_speed), 0)} km/h`],
+      ["Average distance from the net", num(mv.avg_dist_to_net_m, 1, " m")],
+      ["Court coverage", pct(mv.court_coverage), "of their half"],
+      ["Time on the left side", pct(mv.time_left_side)],
+    ]),
+    h("h2", { style: "margin-top:18px" }, "Time by zone"), h("p", { class: "sub" }, `Net: closer than ${D.settings.net_zone} m. Back: farther than ${D.settings.back_zone} m.`),
+    barList([{ label: "At the net", value: mv.time_at_net || 0, text: pct(mv.time_at_net) }, { label: "In the middle", value: mv.time_in_middle || 0, text: pct(mv.time_in_middle) },
+      { label: "At the back", value: mv.time_at_back || 0, text: pct(mv.time_at_back) }], team)));
+  if (!sh) { grid.append(card("", "Shots", null, h("p", { class: "empty" }, "No ball data in this run, so there are no shot statistics."))); return; }
+  grid.append(card("c4", "Shots", null, statList([
+    ["Shots", String(sh.shots)],
+    ["Attacking shots", pct(sh.attacking_share)],
+    ["Average speed", num(sh.avg_speed_kmh, 0, " km/h")],
+    ["Fastest", num(sh.max_speed_kmh, 0, " km/h")],
+    ["Average contact height", num(sh.avg_contact_height_m, 2, " m")],
+    ["Landing deep", pct(sh.deep_share), "past the service line"],
+    (sh.winners + sh.errors > 0) && ["Winners / errors", sh.winners + " / " + sh.errors],
+  ])));
+  const typeRows = D.shot_types.filter(t => sh.by_type[t] > 0).sort((a, b) => sh.by_type[b] - sh.by_type[a]).map(t => ({ label: label(t), value: sh.by_type[t] }));
+  grid.append(card("c4", "Shot types", "Estimated by rules.", typeRows.length ? barList(typeRows, team) : h("p", { class: "empty" }, "No shots found.")));
+  const opp = D.players.filter(q => q.team !== team);
+  grid.append(card("c4", "Direction and target", "Where the shots went, and which opponent played the next ball.",
+    barList(shareRows(sh.direction, ["cross", "middle", "line"], { cross: "Cross-court", middle: "Middle", line: "Down the line" }), team),
+    h("div", { style: "height:14px" }),
+    barList(shareRows(sh.targets, opp.map(q => q.id), Object.fromEntries(opp.map(q => [q.id, "To " + q.id]))), team),
+    h("div", { style: "height:14px" }),
+    barList(shareRows(sh.from_zone, ["net", "middle", "back"], { net: "Hit at the net", middle: "Hit mid-court", back: "Hit at the back" }), team)));
+}
+
+// ---------------------------------------------------------------- shots
+function shots() {
+  const page = document.getElementById("p-shots"); page.replaceChildren();
+  if (!D.shots.length) { page.append(h("div", { class: "grid" }, card("", "Shots", null, h("p", { class: "empty" }, "No shots were found in this run.")))); return; }
+  const typesHere = D.shot_types.filter(t => D.shots.some(s => s.type === t));
+  page.append(h("div", { class: "filters" },
+    h("div", { class: "seg", role: "group", "aria-label": "Player" }, [["all", "All players"], ...D.players.map(p => [p.id, p.id])].map(([id, text]) =>
+      h("button", { "aria-pressed": String(state.mapPlayer === id), onclick: () => { state.mapPlayer = id; shots(); } }, id !== "all" && dot(id), text))),
+    h("select", { "aria-label": "Shot type", onchange: ev => { state.mapType = ev.target.value; shots(); } },
+      h("option", { value: "all" }, "All shot types"), typesHere.map(t => h("option", { value: t, selected: state.mapType === t ? "" : null }, label(t))))));
+  const sel = D.shots.filter(s => (state.mapPlayer === "all" || s.player === state.mapPlayer) && (state.mapType === "all" || s.type === state.mapType));
+  const grid = h("div", { class: "grid" }); page.append(grid);
+  const drawn = sel.filter(s => s.contact && s.landing);
+  grid.append(card("c5", "Shot map", `${drawn.length} of ${sel.length} selected shots have a landing spot. Line: from the hitter to where the ball landed.`, shotMap(drawn),
+    h("div", { class: "legend" }, D.teams.map(t => h("span", {}, h("i", { class: "dot " + t.id }), t.players.join(" · "))), h("span", {}, "Mark: landing spot"))));
+  const speeds = sel.filter(s => has(s.speed_kmh)).sort((a, b) => b.speed_kmh - a.speed_kmh).slice(0, 8);
+  grid.append(card("c7", "Fastest shots", "Launch speed from the 3D fit where it is good, else the average speed to the landing spot.",
+    speeds.length ? h("div", { class: "bl" }, speeds.map(s => [
+      h("div", { class: "k" }, who(s.player), " " + label(s.type)),
+      h("div", { class: "track" }, h("i", { class: "fill " + s.team, style: `width:${100 * s.speed_kmh / speeds[0].speed_kmh}%` })),
+      h("div", { class: "n" }, Math.round(s.speed_kmh) + " km/h", h("small", {}, clock(s.time_s - D.t0)))])) : h("p", { class: "empty" }, "No speeds for this selection."),
+    h("h2", { style: "margin-top:20px" }, "Contact height"), h("p", { class: "sub" }, "How high the ball was when each shot was hit, by time. Above 1.75 m is over the head."),
+    heightStrip(sel)));
+  grid.append(card("", "All shots", `${sel.length} shots`, h("div", { class: "scroll" }, h("table", {},
+    h("thead", {}, h("tr", {}, ["#", "Time", "Player", "Type", "Speed", "Contact", "From", "Direction", "To", "Landing", "Seen"].map((c, i) => h("th", { class: i === 2 || i === 3 || i > 5 ? "l" : "" }, c)))),
+    h("tbody", {}, sel.map(s => h("tr", {},
+      h("td", {}, String(s.index + 1)), h("td", {}, clock(s.time_s - D.t0)), h("td", { class: "l" }, who(s.player)), h("td", { class: "l" }, label(s.type)),
+      h("td", {}, has(s.speed_kmh) ? Math.round(s.speed_kmh) + " km/h" : "–"), h("td", {}, num(s.contact_height_m, 1, " m")),
+      h("td", { class: "l" }, s.zone ? ({ net: "Net", middle: "Mid-court", back: "Back" })[s.zone] : "–"),
+      h("td", { class: "l" }, s.direction ? ({ cross: "Cross-court", line: "Down the line", middle: "Middle" })[s.direction] : "–"),
+      h("td", { class: "l" }, s.target ? who(s.target) : "–"),
+      h("td", { class: "l" }, s.landing ? `${s.landing[0].toFixed(1)}, ${s.landing[1].toFixed(1)}` : "–"),
+      h("td", { class: "l" }, ({ high: "Well", medium: "Partly", low: "Poorly" })[s.confidence] || "–"))))))));
+}
+function shotMap(list) {
+  // Court drawn upright: T_1's end (near the camera, y = 0) at the bottom.
+  const S = 30, W = 10 * S, H = 20 * S, pad = 8, X = x => pad + x * S, Y = y => pad + (20 - y) * S, sv = D.settings.service_line;
+  const svg = h("svg", { viewBox: `0 0 ${W + 2 * pad} ${H + 2 * pad}`, role: "img", "aria-label": "Shot map", style: "max-height:640px" });
+  svg.append(h("rect", { class: "court-bg", x: pad, y: pad, width: W, height: H, rx: 10 }), h("rect", { class: "court-ln", x: pad, y: pad, width: W, height: H, rx: 10, "stroke-width": 1.5 }));
+  for (const y of [10 - sv, 10 + sv]) svg.append(h("line", { class: "court-ln", x1: X(0), x2: X(10), y1: Y(y), y2: Y(y), "stroke-width": 1.5 }));
+  svg.append(h("line", { class: "court-ln", x1: X(5), x2: X(5), y1: Y(10 - sv), y2: Y(10 + sv), "stroke-width": 1.5 }), h("line", { class: "court-ln", x1: X(0), x2: X(10), y1: Y(10), y2: Y(10), "stroke-width": 3 }));
+  svg.append(h("text", { x: X(10) - 6, y: Y(10) - 7, "text-anchor": "end", style: "fill:var(--court-text);font-weight:500" }, "Net"));
+  for (const s of list) {
+    const c = `var(--${s.team === "T_1" ? "t1" : "t2"})`, [x1, y1] = s.contact, [x2, y2] = s.landing;
+    const g = h("g", { class: "shot" },
+      h("line", { x1: X(x1), y1: Y(y1), x2: X(x2), y2: Y(y2), stroke: "transparent", "stroke-width": 12 }),
+      h("line", { x1: X(x1), y1: Y(y1), x2: X(x2), y2: Y(y2), stroke: "var(--court)", "stroke-width": 4.5, "stroke-linecap": "round" }),
+      h("line", { x1: X(x1), y1: Y(y1), x2: X(x2), y2: Y(y2), stroke: c, "stroke-width": 2, "stroke-linecap": "round", opacity: .85 }),
+      mark(X(x2), Y(y2), 5.5, s.team, true, "var(--court)"));
+    g.addEventListener("mouseenter", () => { svg.querySelectorAll(".shot").forEach(o => o.style.opacity = o === g ? 1 : .18); });
+    g.addEventListener("mouseleave", () => { svg.querySelectorAll(".shot").forEach(o => o.style.opacity = 1); });
+    svg.append(tipOn(g, () => shotTip(s)));
+  }
+  return svg;
+}
+function heightStrip(list) {
+  const W = 640, H = 150, L = 34, B = 20, T = Math.max(1, D.duration_s), top = 3.2;
+  const x = t => L + (t - D.t0) / T * (W - L - 6), y = v => 6 + (1 - Math.min(v, top) / top) * (H - B - 6);
+  const svg = h("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Contact height of each shot over time" });
+  for (const v of [0, 1, 2, 3]) svg.append(h("line", { x1: L, x2: W - 6, y1: y(v), y2: y(v), stroke: "var(--line)" }), h("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, v + " m"));
+  svg.append(h("line", { x1: L, x2: W - 6, y1: y(1.75), y2: y(1.75), stroke: "var(--muted)", "stroke-width": 1 }), h("text", { x: W - 6, y: y(1.75) - 5, "text-anchor": "end", style: "paint-order:stroke;stroke:var(--card);stroke-width:5px;stroke-linejoin:round" }, "head height"));
+  for (const s of list) if (has(s.contact_height_m)) {
+    svg.append(tipOn(h("g", { class: "shot" }, h("circle", { cx: x(s.time_s), cy: y(s.contact_height_m), r: 10, fill: "transparent" }),
+      mark(x(s.time_s), y(s.contact_height_m), 4.5, s.team, true)), () => shotTip(s)));
+  }
+  return svg;
+}
+
+// ---------------------------------------------------------------- rallies
+function rallies() {
+  const page = document.getElementById("p-rallies"), list = D.rallies;
+  const names = { winner: "Winner", error: "Error", cut: "Video ends mid-rally", unknown: "Not clear" };
+  const grid = h("div", { class: "grid" }); page.append(grid);
+  if (list) {
+    const known = list.filter(r => r.outcome === "winner" || r.outcome === "error").length;
+    grid.append(card("", "Rallies", `From the ball track. How a rally ended is read from the last shot's fitted flight: an estimate, clear for ${known} of ${list.length}.`,
+      h("div", { class: "scroll" }, h("table", {},
+        h("thead", {}, h("tr", {}, ["#", "Start", "Length", "Shots", "Last shot by", "Last shot", "Ended with"].map((c, i) => h("th", { class: i > 3 ? "l" : "" }, c)))),
+        h("tbody", {}, list.map(r => h("tr", {}, h("td", {}, String(r.rally + 1)), h("td", {}, clock(r.start_s - D.t0)), h("td", {}, dur(r.duration_s)), h("td", {}, String(r.shots)),
+          h("td", { class: "l" }, r.last_player ? who(r.last_player) : "–"), h("td", { class: "l" }, r.last_type ? label(r.last_type) : "–"), h("td", { class: "l" }, names[r.outcome] || "–"))))))));
+  }
+  const mv = D.movement_rallies;
+  // With ball rallies in use, these are the same rallies again: only show them when movement decided.
+  if (!list || D.settings.rally_source === "movement") grid.append(card("", list ? "Rallies used for the position statistics" : "Rallies", "Found from how the players move (someone keeps making fast moves), because the ball was not seen often enough to mark them.",
+    mv.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["#", "Start", "End", "Length"].map(c => h("th", {}, c)))),
+      h("tbody", {}, mv.map((r, i) => h("tr", {}, h("td", {}, String(i + 1)), h("td", {}, clock(r.start_s - D.t0)), h("td", {}, clock(r.end_s - D.t0)), h("td", {}, dur(r.duration_s))))))) : h("p", { class: "empty" }, "None found.")));
+}
+
+// ---------------------------------------------------------------- about
+function about() {
+  const q = D.quality, page = document.getElementById("p-about");
+  const swaps = q.swaps_fixed.length ? `${q.swaps_fixed.length} identity swap(s) were corrected (at ${q.swaps_fixed.map(s => clock(s.time_s - D.t0)).join(", ")}).` : "no identity swaps were found.";
+  page.append(h("div", { class: "grid" },
+    card("c6", "Data quality", "Check these first: everything else is only as good as the tracking.", statList([
+      ["Frames with the ball detected", pct(q.ball_coverage)],
+      ["Ball detections kept after cleaning", pct(q.ball_kept)],
+      ["3D ball flights", q.has_3d ? "fitted" : "not used"],
+      ...D.players.map(p => [p.id + " tracked", pct(p.move.tracked), `(${pct(p.move.interpolated)} filled in)`]),
+    ])),
+    card("c6", "Player identities", null, h("p", { class: "note" },
+      `The four players are followed by position and motion; ${q.tracker_ids_merged} raw tracker IDs were merged into them and ${q.interpolated_frames} frames filled in across short gaps. ` +
+      (q.appearance_used ? `The result was checked against what the players look like: ${swaps} Players in the same kit can't be told apart this way.` : "Player looks were not checked (no appearance data next to the cache)."))),
+    card("", "How the numbers are made", null, h("div", { html: `
+      <dl>
+        <dt>Positions</dt><dd>Each player's feet mapped through the court calibration (accuracy roughly 0.2–0.4 m). Distance and speed come from smoothed positions; standing still (under ${D.settings.still_speed} m/s) adds no distance. Position statistics count rally time only.</dd>
+        <dt>Heatmaps</dt><dd>Share of rally time in each spot of the player's own half, flipped so the net is at the top whichever end they play from. Colour runs from little time (green) to most time (red), relative to that player's own busiest spot.</dd>
+        <dt>Rallies</dt><dd>From the ball track (first shot to last ball movement) when the ball is seen often enough, otherwise from player movement.</dd>
+        <dt>Shots</dt><dd>A shot is a change in the ball's path within a player's reach. Missed ball detections mean missed shots.</dd>
+        <dt>Shot types</dt><dd>Decided by rules, not a trained model: contact above the head is a smash when fast and a bandeja / víbora otherwise (the two are not told apart); a ball that goes high, or that the opponents answer with an overhead, is a lob; taken before the bounce near the net is a volley; hard and high off the back wall is a bajada; soft and short from the back is a chiquita; other shots after the bounce are drives. Expect mistakes, mostly between neighbouring types.</dd>
+        <dt>Speed</dt><dd>The launch speed of the fitted 3D flight when that fit is good, otherwise the average speed from the hitter to the landing spot (which reads lower).</dd>
+        <dt>Contact height</dt><dd>Where the ball is within the hitter's outline in the image, scaled to a 1.75 m player.</dd>
+        <dt>Direction and target</dt><dd>From where the hitter stood to where the ball landed (or to the opponent who played it next). Middle = within 1.25 m of the centre line.</dd>
+        <dt>Winners and errors</dt><dd>An estimate from the last shot of each rally. They need whole points on video: a clip that starts or stops mid-rally has none.</dd>
+      </dl>` }))));
+}
+
+// ---------------------------------------------------------------- shell
+const TABS = [["overview", "Overview"], ["players", "Players"], ["shots", "Shots"], ["rallies", "Rallies"], ["about", "About the numbers"]];
+function go(id, push = true) {
+  if (!TABS.some(t => t[0] === id)) id = "overview";
+  for (const [k] of TABS) {
+    document.getElementById("p-" + k).classList.toggle("on", k === id);
+    document.getElementById("tab-" + k).setAttribute("aria-selected", String(k === id));
+  }
+  if (id === "players") players();
+  if (id === "shots") shots();
+  if (push) history.replaceState(null, "", "#" + id);
+  scrollTo({ top: 0 });
+}
+function init() {
+  document.title = D.title + " · CourtShot match report";
+  document.getElementById("lockup").append(logo(), "CourtShot");
+  document.getElementById("title").textContent = D.title;
+  const m = D.match;
+  document.getElementById("meta").append(...[dur(D.duration_s) + " analysed", m ? m.rallies + (m.rallies === 1 ? " rally" : " rallies") : null, m ? m.shots + " shots" : null]
+    .filter(Boolean).map(t => h("span", {}, t)));
+  document.getElementById("sides").append(...D.teams.map(t => h("div", { class: "side" }, h("i", { class: "dot " + t.id }), t.players.join(" · "), h("small", {}, t.id))));
+  const tabs = document.getElementById("tabs");
+  tabs.append(...TABS.map(([id, text]) => h("button", { id: "tab-" + id, role: "tab", onclick: () => go(id) }, text)), h("span", { class: "spacer" }),
+    h("button", { class: "theme", onclick: toggleTheme, title: "Switch between the dark and the light version" }, "Appearance"));
+  const forced = new URLSearchParams(location.search).get("theme");
+  if (forced === "dark" || forced === "light") document.documentElement.dataset.theme = forced;
+  overview(); rallies(); about();
+  go(location.hash.slice(1) || "overview", false);
+}
+function toggleTheme() {
+  const root = document.documentElement;
+  root.dataset.theme = root.dataset.theme === "light" ? "dark" : "light";
+  redraws.forEach(f => f());   // canvases read their colours from the theme
+}
+if (D) init(); else document.getElementById("title").textContent = "No data: this is the report template. Run `python -m courtshot report`.";
+</script>
+</body>
+</html>

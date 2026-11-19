@@ -1,5 +1,5 @@
 """
-Project: Padex
+Project: CourtShot
 File Created: 2026-03-04
 Author: Xingnan Zhu
 File Name: test_video_writer.py
@@ -9,7 +9,7 @@ Description:
 
 import numpy as np
 
-from padex.io.video import VideoWriter
+from courtshot.io.video import VideoWriter
 
 
 class TestVideoWriter:

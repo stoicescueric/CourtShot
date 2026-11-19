@@ -1,5 +1,5 @@
 """
-Tests for padex.analysis.swing (what the hitter's body did around a hit) and for the
+Tests for courtshot.analysis.swing (what the hitter's body did around a hit) and for the
 two places that use it: ball_events drops "hits" by players standing still,
 shots takes overhead / not overhead from the pose.
 """
@@ -10,10 +10,10 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from padex.analysis import ball_events as bt
-from padex.analysis import shots as ms
-from padex.analysis import swing as sp
-from padex.schemas.tracking import BoundingBox, PlayerFrame, PoseKeypoint, Position2D
+from courtshot.analysis import ball_events as bt
+from courtshot.analysis import shots as ms
+from courtshot.analysis import swing as sp
+from courtshot.schemas.tracking import BoundingBox, PlayerFrame, PoseKeypoint, Position2D
 
 FPS = 25.0
 HIT = 20  # frame of the hit in every test

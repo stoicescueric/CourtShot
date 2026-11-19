@@ -140,7 +140,7 @@ def main() -> None:
 
     import cv2
 
-    from padex.analysis.match import analyse_cache
+    from courtshot.analysis.match import analyse_cache
 
     cap = cv2.VideoCapture(str(a.video))
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0

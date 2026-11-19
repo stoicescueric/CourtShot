@@ -18,7 +18,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from padex.analysis.match import analyse_cache
+from courtshot.analysis.match import analyse_cache
 
 
 def main():
@@ -76,7 +76,7 @@ def main():
     held = sorted(picks, key=lambda i: score[i])[len(picks) // 2] if len(picks) > 1 else None
     print(
         f"\nLabel these {len(picks)} stretches ({a.seconds:.0f} s each, about {W} frames). "
-        "Enter accepts Padex's suggestion, so most frames take one key press.\n"
+        "Enter accepts CourtShot's suggestion, so most frames take one key press.\n"
     )
     k = 0
     for i in picks:
