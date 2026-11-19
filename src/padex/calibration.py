@@ -1,14 +1,11 @@
 """
-Project: Padex
-File Created: 2026-03-07
-Author: Xingnan Zhu
-File Name: calibration.py
-Description:
-    Interactive court calibration tools.
+Interactive court calibration: pick a frame, click the court keypoints, get a
+CourtCalibration saved next to the video as <video>_calibration.json.
 
-    Provides FrameSelector and KeypointLabeler for manual court keypoint
-    labeling, plus a convenience function interactive_calibrate() that
-    runs the full calibration workflow.
+The camera must not move during the match; one calibration then serves the
+whole video. tools/check_calibration.py tells which click hurts a fit.
+
+Original author: Xingnan Zhu.
 """
 
 from __future__ import annotations
@@ -20,8 +17,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from padex.court import COURT_MODEL, calibration_from_keypoints
 from padex.schemas.tracking import CourtCalibration
-from padex.tracking.court import COURT_MODEL, CourtDetector
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +256,9 @@ def verify_calibration(
         cv2.line(display, pt_a, pt_b, (255, 255, 255), 1, cv2.LINE_AA)
 
     cv2.rectangle(display, (0, 0), (display.shape[1], 40), (0, 0, 0), -1)
-    msg = f"Verification  |  Reprojection error: {calibration_data['reprojection_error']:.4f}m  |  Press any key to close"
+    msg = (
+        f"Verification  |  Reprojection error: {calibration_data['reprojection_error']:.4f}m  |  Press any key to close"
+    )
     cv2.putText(display, msg, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
 
     cv2.namedWindow("Verify Calibration", cv2.WINDOW_NORMAL)
@@ -314,7 +313,7 @@ def interactive_calibrate(
 
     logger.info("Labeled %d keypoints — computing homography…", len(keypoints))
     try:
-        calibration = CourtDetector.manual_calibration(
+        calibration = calibration_from_keypoints(
             keypoints_px=keypoints,
             frame_width=w,
             frame_height=h,

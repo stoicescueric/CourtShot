@@ -8,7 +8,6 @@ Description:
 """
 
 import numpy as np
-import pytest
 
 from padex.io.video import VideoWriter
 

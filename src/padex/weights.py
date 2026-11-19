@@ -1,13 +1,8 @@
 """
-Project: Padex
-File Created: 2026-03-07
-Author: Xingnan Zhu
-File Name: weights.py
-Description:
-    Model weight management with automatic downloading from GitHub Releases.
+The YOLO weights (people and pose): downloaded on first use and kept in
+~/.padex/weights/. The ball model is not here: it ships in checkpoints/.
 
-    Weights are cached locally in ~/.padex/weights/ and downloaded on
-    first use. Users can also specify custom paths to skip downloading.
+Original author: Xingnan Zhu.
 """
 
 from __future__ import annotations
@@ -21,15 +16,11 @@ logger = logging.getLogger(__name__)
 
 WEIGHTS_DIR = Path.home() / ".padex" / "weights"
 
-GITHUB_RELEASE_BASE = (
-    "https://github.com/rondo-labs/Padex/releases/download/v0.1.0"
-)
+GITHUB_RELEASE_BASE = "https://github.com/rondo-labs/Padex/releases/download/v0.1.0"
 
 WEIGHT_REGISTRY: dict[str, str] = {
     "yolo26m.pt": f"{GITHUB_RELEASE_BASE}/yolo26m.pt",
     "yolo26m-pose.pt": f"{GITHUB_RELEASE_BASE}/yolo26m-pose.pt",
-    "ball_detection_TrackNet.pt": f"{GITHUB_RELEASE_BASE}/ball_detection_TrackNet.pt",
-    "ball_detection_TrackNetV3.pt": f"{GITHUB_RELEASE_BASE}/ball_detection_TrackNetV3.pt",
 }
 
 
@@ -47,9 +38,7 @@ def get_weight_path(name: str) -> Path:
         RuntimeError: If download fails.
     """
     if name not in WEIGHT_REGISTRY:
-        raise ValueError(
-            f"Unknown weight '{name}'. Available: {list(WEIGHT_REGISTRY.keys())}"
-        )
+        raise ValueError(f"Unknown weight '{name}'. Available: {list(WEIGHT_REGISTRY.keys())}")
 
     local_path = WEIGHTS_DIR / name
     if local_path.exists():
@@ -91,6 +80,4 @@ def _download_with_progress(url: str, dest: Path) -> None:
                     pct = downloaded / total * 100
                     mb = downloaded / (1024 * 1024)
                     total_mb = total / (1024 * 1024)
-                    logger.info(
-                        "  %.1f / %.1f MB (%.0f%%)", mb, total_mb, pct
-                    )
+                    logger.info("  %.1f / %.1f MB (%.0f%%)", mb, total_mb, pct)

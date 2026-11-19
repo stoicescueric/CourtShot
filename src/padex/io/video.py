@@ -116,7 +116,10 @@ class VideoWriter:
 
         fourcc = cv2.VideoWriter_fourcc(*codec)
         self._writer = cv2.VideoWriter(
-            str(self.path), fourcc, fps, frame_size,
+            str(self.path),
+            fourcc,
+            fps,
+            frame_size,
         )
         if not self._writer.isOpened():
             raise RuntimeError(f"Cannot open video writer: {self.path}")

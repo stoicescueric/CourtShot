@@ -1,393 +1,56 @@
 """
-Project: Padex
-File Created: 2026-03-03
-Author: Xingnan Zhu
-File Name: ball.py
-Description:
-    Ball detection and trajectory tracking.
-    Provides two detection strategies:
-    - TrackNetBallDetectionStrategy: lightweight CNN that processes 3
-      consecutive frames as a 9-channel input and outputs a heatmap.
-      Fast, purpose-built for small high-speed balls.
-    - SahiYoloBallDetectionStrategy: SAHI sliced YOLO. Slower but can
-      be used as a fallback or for single-frame detection.
-    Both feed into the same KalmanBallTracker for gap-filling.
+Ball detection with TrackNetV3.
+
+TrackNetV3 is a U-Net that looks at a background frame plus SEQ_LEN
+consecutive frames at once and gives one heatmap per frame. A padel ball is a
+few blurred pixels in broadcast footage; seeing it move is what makes it
+findable.
+
+The detector reports at most one ball per frame (plus up to two look-alikes,
+see BallFrame.candidates). It knows nothing about trajectories: wrong
+detections (reflections, a spare ball on the floor) are sorted out later, in
+padex.analysis.ball_events.
+
+Model architecture: qaz812345/TrackNetV3 (MIT). Weights: fine-tuned on padel
+with tools/train_tracknetv3.py.
+
+Original author: Xingnan Zhu.
 """
 
 from __future__ import annotations
 
-import abc
 import logging
-from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
-from padex.tracking.device import use_half_precision
-from padex.schemas.tracking import (
-    BallFrame,
-    BallVisibility,
-    BoundingBox,
-    Position3D,
-)
+from padex.schemas.tracking import BallFrame, BoundingBox
+from padex.tracking.device import detect_device, use_half_precision
+
+if TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
+BALL_BOX_RADIUS = 4  # pixels; the box reported around the ball's centre
 
 
-@dataclass
-class RawBallDetection:
-    """Single ball detection from a frame."""
+def build_tracknet_v3(in_dim: int = 9, out_dim: int = 3) -> torch.nn.Module:
+    """The TrackNetV3 network (U-Net with skip connections).
 
-    bbox: BoundingBox
-    confidence: float
-    frame_id: int
-    timestamp_ms: float
-    # Every ball-like blob in this frame as (x, y, confidence) in pixels,
-    # the one in `bbox` first. Empty for detectors that return one result.
-    candidates: list[tuple[float, float, float]] = field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Abstract interfaces
-# ---------------------------------------------------------------------------
-
-
-class BallDetectionStrategy(abc.ABC):
-    """Abstract interface for ball detection backends."""
-
-    @abc.abstractmethod
-    def detect(
-        self, frame: np.ndarray, frame_id: int, timestamp_ms: float
-    ) -> RawBallDetection | None:
-        """Detect ball in a single frame. Returns None if not found."""
-        ...
-
-    @abc.abstractmethod
-    def reset(self) -> None:
-        """Reset detector state."""
-        ...
-
-
-class BallTracker(abc.ABC):
-    """Abstract interface for ball tracking across frames."""
-
-    @abc.abstractmethod
-    def update(
-        self, detection: RawBallDetection | None, timestamp_ms: float
-    ) -> tuple[Position3D | None, BallVisibility]:
-        """Update tracker with (possibly absent) detection.
-
-        Returns (position_in_meters, visibility_state).
-        """
-        ...
-
-    @abc.abstractmethod
-    def reset(self) -> None:
-        """Reset tracker state."""
-        ...
-
-    @abc.abstractmethod
-    def set_homography(self, H: np.ndarray | None) -> None:
-        """Set or update the pixel-to-court homography matrix."""
-        ...
-
-
-# ---------------------------------------------------------------------------
-# TrackNet model definition
-# ---------------------------------------------------------------------------
-
-
-class _ConvBlock(object):
-    """Placeholder — actual implementation uses nn.Sequential inside model."""
-
-
-def _build_tracknet() -> "torch.nn.Module":
-    """Build the BallTrackerNet architecture matching the pretrained weights.
-
-    Architecture (VGG encoder-decoder, no skip connections):
       Encoder:
-        conv1(9→64)  conv2(64→64)   → MaxPool
-        conv3(64→128) conv4(128→128) → MaxPool
-        conv5(128→256) conv6(256→256) conv7(256→256) → MaxPool
-        conv8(256→512) conv9(512→512) conv10(512→512)
-      Decoder (bilinear 2× upsample between groups):
-        conv11(512→256) conv12(256→256) conv13(256→256) → Upsample
-        conv14(256→128) conv15(128→128) → Upsample
-        conv16(128→64) conv17(64→64) → Upsample
-        conv18(64→256) → reshape + softmax
-
-    Input:  (B, 9, 360, 640)   — 3 frames × RGB stacked
-    Output: (B, 256, 360×640) after softmax → argmax → (B, 360, 640) heatmap
-    """
-    import torch.nn as nn
-
-    class _ConvBNReLU(nn.Module):
-        """Wraps Conv+ReLU+BN as a sub-module named 'block' to match checkpoint keys."""
-        def __init__(self, in_ch: int, out_ch: int) -> None:
-            super().__init__()
-            self.block = nn.Sequential(
-                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
-                nn.ReLU(inplace=True),
-                nn.BatchNorm2d(out_ch),
-            )
-        def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-            return self.block(x)
-
-    def conv_block(in_ch: int, out_ch: int) -> "_ConvBNReLU":
-        return _ConvBNReLU(in_ch, out_ch)
-
-    class BallTrackerNet(nn.Module):
-        def __init__(self) -> None:
-            super().__init__()
-            # Encoder
-            self.conv1 = conv_block(9, 64)
-            self.conv2 = conv_block(64, 64)
-            self.pool1 = nn.MaxPool2d(2, 2)
-            self.conv3 = conv_block(64, 128)
-            self.conv4 = conv_block(128, 128)
-            self.pool2 = nn.MaxPool2d(2, 2)
-            self.conv5 = conv_block(128, 256)
-            self.conv6 = conv_block(256, 256)
-            self.conv7 = conv_block(256, 256)
-            self.pool3 = nn.MaxPool2d(2, 2)
-            self.conv8 = conv_block(256, 512)
-            self.conv9 = conv_block(512, 512)
-            self.conv10 = conv_block(512, 512)
-            # Decoder
-            self.up1 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-            self.conv11 = conv_block(512, 256)
-            self.conv12 = conv_block(256, 256)
-            self.conv13 = conv_block(256, 256)
-            self.up2 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-            self.conv14 = conv_block(256, 128)
-            self.conv15 = conv_block(128, 128)
-            self.up3 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-            self.conv16 = conv_block(128, 64)
-            self.conv17 = conv_block(64, 64)
-            self.conv18 = conv_block(64, 256)
-            self.softmax = nn.Softmax(dim=1)
-
-        def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-            batch = x.shape[0]
-            x = self.conv1(x)
-            x = self.conv2(x)
-            x = self.pool1(x)
-            x = self.conv3(x)
-            x = self.conv4(x)
-            x = self.pool2(x)
-            x = self.conv5(x)
-            x = self.conv6(x)
-            x = self.conv7(x)
-            x = self.pool3(x)
-            x = self.conv8(x)
-            x = self.conv9(x)
-            x = self.conv10(x)
-            x = self.up1(x)
-            x = self.conv11(x)
-            x = self.conv12(x)
-            x = self.conv13(x)
-            x = self.up2(x)
-            x = self.conv14(x)
-            x = self.conv15(x)
-            x = self.up3(x)
-            x = self.conv16(x)
-            x = self.conv17(x)
-            x = self.conv18(x)
-            # Reshape to (batch, 256, H*W) then softmax
-            x = x.reshape(batch, 256, -1)
-            x = self.softmax(x)
-            return x
-
-    return BallTrackerNet()
-
-
-# ---------------------------------------------------------------------------
-# TrackNet ball detection strategy
-# ---------------------------------------------------------------------------
-
-
-class TrackNetBallDetectionStrategy(BallDetectionStrategy):
-    """Ball detection using TrackNet: 3-frame heatmap CNN.
-
-    Processes 3 consecutive frames stacked as a 9-channel input (640×360).
-    Outputs a heatmap; extracts ball center via argmax + Hough circles.
-
-    Significantly faster than SAHI+YOLO: one forward pass per frame instead
-    of ~20 sliced YOLO inferences.
-    """
-
-    # TrackNet was trained on 640×360
-    INFER_W: int = 640
-    INFER_H: int = 360
-    HEATMAP_THRESHOLD: int = 127
-
-    def __init__(
-        self,
-        model_path: str | None = None,
-        device: str | None = None,
-    ) -> None:
-        if model_path is None:
-            from padex.weights import get_weight_path
-
-            model_path = str(get_weight_path("ball_detection_TrackNet.pt"))
-        self.model_path = model_path
-        self._device_str = device
-        self._model = None
-        self._frame_buffer: list[np.ndarray] = []  # last 3 resized frames
-
-    def _ensure_model(self) -> None:
-        if self._model is not None:
-            return
-        import torch
-
-        device = self._device_str or self._auto_device()
-        self._torch_device = torch.device(device)
-
-        model = _build_tracknet()
-        state = torch.load(
-            self.model_path, map_location="cpu", weights_only=False
-        )
-        model.load_state_dict(state)
-        model.eval()
-        model.to(self._torch_device)
-        self._model = model
-        logger.info("TrackNet loaded on %s", device)
-
-    @staticmethod
-    def _auto_device() -> str:
-        try:
-            import torch
-            if torch.cuda.is_available():
-                return "cuda"
-            if torch.backends.mps.is_available():
-                return "mps"
-        except Exception:
-            pass
-        return "cpu"
-
-    def detect(
-        self, frame: np.ndarray, frame_id: int, timestamp_ms: float
-    ) -> RawBallDetection | None:
-        self._ensure_model()
-        import torch
-
-        # Resize and buffer this frame
-        resized = cv2.resize(frame, (self.INFER_W, self.INFER_H))
-        self._frame_buffer.append(resized)
-        if len(self._frame_buffer) > 3:
-            self._frame_buffer.pop(0)
-
-        # Need 3 frames to run inference
-        if len(self._frame_buffer) < 3:
-            return None
-
-        f0, f1, f2 = self._frame_buffer
-        # Stack RGB channels: newest frame first (matches training convention)
-        imgs = np.concatenate([f2, f1, f0], axis=2).astype(np.float32) / 255.0
-        tensor = torch.from_numpy(imgs.transpose(2, 0, 1)).unsqueeze(0)
-        tensor = tensor.to(self._torch_device)
-
-        with torch.no_grad():
-            out = self._model(tensor)  # (1, 256, H*W)
-
-        # Argmax over 256 channels → (1, H*W) → (H, W)
-        heatmap = out.argmax(dim=1).squeeze().cpu().numpy()
-        heatmap = heatmap.reshape(self.INFER_H, self.INFER_W).astype(np.uint8)
-
-        x_pred, y_pred, confidence = self._postprocess(heatmap, frame.shape)
-        if x_pred is None:
-            return None
-
-        h_orig, w_orig = frame.shape[:2]
-        r = 4  # approximate ball radius in original coords
-        scale_x = w_orig / self.INFER_W
-        scale_y = h_orig / self.INFER_H
-        bx = x_pred  # already scaled in _postprocess
-        by = y_pred
-
-        return RawBallDetection(
-            bbox=BoundingBox(
-                x1=float(bx - r), y1=float(by - r),
-                x2=float(bx + r), y2=float(by + r),
-            ),
-            confidence=float(confidence),
-            frame_id=frame_id,
-            timestamp_ms=timestamp_ms,
-        )
-
-    def _postprocess(
-        self,
-        heatmap: np.ndarray,
-        orig_shape: tuple,
-    ) -> tuple[float | None, float | None, float]:
-        """Extract ball center from heatmap. Returns (x, y, confidence) in original pixel coords."""
-        h_orig, w_orig = orig_shape[:2]
-        scale_x = w_orig / self.INFER_W
-        scale_y = h_orig / self.INFER_H
-
-        if heatmap.max() == 0:
-            return None, None, 0.0
-
-        # Normalize to 0-255 and threshold
-        feature = (heatmap.astype(np.float32) / heatmap.max() * 255).astype(np.uint8)
-        _, binary = cv2.threshold(feature, self.HEATMAP_THRESHOLD, 255, cv2.THRESH_BINARY)
-
-        # Find connected components and use the largest blob's centroid
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-            binary, connectivity=8
-        )
-
-        if num_labels <= 1:
-            # No foreground blob found
-            return None, None, 0.0
-
-        # Skip label 0 (background), find largest foreground component
-        fg_areas = stats[1:, cv2.CC_STAT_AREA]
-        best_label = int(np.argmax(fg_areas)) + 1  # +1 to skip background
-
-        # Filter out blobs that are too large (likely noise)
-        if fg_areas[best_label - 1] > 200:
-            return None, None, 0.0
-
-        cx, cy = centroids[best_label]
-
-        # Confidence from peak heatmap value in the blob region
-        blob_mask = labels == best_label
-        confidence = float(heatmap[blob_mask].max()) / 255.0
-
-        return float(cx * scale_x), float(cy * scale_y), confidence
-
-    def reset(self) -> None:
-        self._frame_buffer.clear()
-
-
-# ---------------------------------------------------------------------------
-# TrackNet V3 model definition
-# ---------------------------------------------------------------------------
-
-
-def _build_tracknet_v3(in_dim: int = 9, out_dim: int = 3) -> "torch.nn.Module":
-    """Build the TrackNet V3 architecture (U-Net with skip connections).
-
-    Architecture (from qaz812345/TrackNetV3):
-      Encoder:
-        down_block_1: Double2DConv(in_dim → 64)  + MaxPool
-        down_block_2: Double2DConv(64 → 128)     + MaxPool
-        down_block_3: Triple2DConv(128 → 256)    + MaxPool
-        bottleneck:   Triple2DConv(256 → 512)
+        down_block_1: Double2DConv(in_dim -> 64)  + MaxPool
+        down_block_2: Double2DConv(64 -> 128)     + MaxPool
+        down_block_3: Triple2DConv(128 -> 256)    + MaxPool
+        bottleneck:   Triple2DConv(256 -> 512)
       Decoder (Upsample + concat skip connections):
-        up_block_1: Triple2DConv(512+256=768 → 256) + Upsample
-        up_block_2: Double2DConv(256+128=384 → 128) + Upsample
-        up_block_3: Double2DConv(128+64=192 → 64)
-        predictor: Conv2d(64 → out_dim) + Sigmoid
+        up_block_1: Triple2DConv(512+256 -> 256)
+        up_block_2: Double2DConv(256+128 -> 128)
+        up_block_3: Double2DConv(128+64 -> 64)
+        predictor:  Conv2d(64 -> out_dim) + Sigmoid
 
-    Input:  (B, 9, 288, 512)   — 3 frames × RGB stacked
-    Output: (B, 3, 288, 512)   — per-frame ball heatmap (sigmoid)
+    Layer names match the original checkpoints.
     """
     import torch
     import torch.nn as nn
@@ -399,7 +62,7 @@ def _build_tracknet_v3(in_dim: int = 9, out_dim: int = 3) -> "torch.nn.Module":
             self.bn = nn.BatchNorm2d(out_ch)
             self.relu = nn.ReLU()
 
-        def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
             return self.relu(self.bn(self.conv(x)))
 
     class _Double2DConv(nn.Module):
@@ -408,7 +71,7 @@ def _build_tracknet_v3(in_dim: int = 9, out_dim: int = 3) -> "torch.nn.Module":
             self.conv_1 = _Conv2DBlock(in_ch, out_ch)
             self.conv_2 = _Conv2DBlock(out_ch, out_ch)
 
-        def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
             return self.conv_2(self.conv_1(x))
 
     class _Triple2DConv(nn.Module):
@@ -418,7 +81,7 @@ def _build_tracknet_v3(in_dim: int = 9, out_dim: int = 3) -> "torch.nn.Module":
             self.conv_2 = _Conv2DBlock(out_ch, out_ch)
             self.conv_3 = _Conv2DBlock(out_ch, out_ch)
 
-        def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
             return self.conv_3(self.conv_2(self.conv_1(x)))
 
     class TrackNetV3(nn.Module):
@@ -434,7 +97,7 @@ def _build_tracknet_v3(in_dim: int = 9, out_dim: int = 3) -> "torch.nn.Module":
             self.predictor = nn.Conv2d(64, out_dim, kernel_size=(1, 1))
             self.sigmoid = nn.Sigmoid()
 
-        def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
             x1 = self.down_block_1(x)
             x = nn.MaxPool2d((2, 2), stride=(2, 2))(x1)
             x2 = self.down_block_2(x)
@@ -454,64 +117,118 @@ def _build_tracknet_v3(in_dim: int = 9, out_dim: int = 3) -> "torch.nn.Module":
     return TrackNetV3()
 
 
-# ---------------------------------------------------------------------------
-# TrackNet V3 ball detection strategy
-# ---------------------------------------------------------------------------
+class BallDetector:
+    """Streaming ball detector: feed frames in order, get BallFrames back.
 
+    Each frame is part of up to SEQ_LEN overlapping windows; its heatmap is
+    the average over all of them, so the model has seen the frames after it
+    as well as those before. Results therefore come SEQ_LEN - 1 frames late:
+    update() returns the frames that are now final, flush() the rest.
 
-class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
-    """Ball detection using TrackNet V3: U-Net with skip connections.
-
-    V3 improvements over V2:
-    - Skip connections in decoder (better small-target localization)
-    - 3-channel sigmoid output (simpler than 256-class softmax)
-    - Weighted BCE + Focal Loss training (better class imbalance handling)
-
-    Input:  9-channel (3 RGB frames), resized to 512×288
-    Output: 3-channel sigmoid heatmap; channel 2 = current frame detection
+    Input:  27 channels = background frame + SEQ_LEN frames, at INFER_W x INFER_H
+    Output: SEQ_LEN sigmoid heatmaps, one per frame of the window
     """
 
     INFER_W: int = 512
     INFER_H: int = 288
-    HEATMAP_THRESHOLD: float = 0.5  # sigmoid output in [0, 1]
-    MAX_BLOB_AREA: int = 200
+    HEATMAP_THRESHOLD: float = 0.5
+    MAX_BLOB_AREA: int = 200  # larger blobs are not a ball (at INFER_W x INFER_H)
     MAX_CANDIDATES: int = 3  # blobs kept per frame (the ball plus look-alikes)
-    SEQ_LEN: int = 8  # number of target frames (checkpoint param_dict: seq_len=8)
-    # bg_mode='concat': input = [bg_frame, frame_1, ..., frame_8] = 9 frames = 27 channels
+    SEQ_LEN: int = 8
 
-    def __init__(
-        self,
-        model_path: str | None = None,
-        device: str | None = None,
-    ) -> None:
-        if model_path is None:
-            from padex.weights import get_weight_path
-
-            model_path = str(get_weight_path("ball_detection_TrackNetV3.pt"))
-        self.model_path = model_path
+    def __init__(self, model_path: str, device: str | None = None) -> None:
+        self.model_path = str(model_path)
         self._device_str = device
         self._model = None
         self._frame_buffer: list = []  # last SEQ_LEN frames, as tensors on the device
-        self._bg_tensor = None
-        # Background: set_background() if called, else the first seen frame
+        self._bg_source: np.ndarray | None = None  # from set_background()
         self._bg_frame: np.ndarray | None = None
-        self._bg_source: np.ndarray | None = None
-        # detect_smoothed(): model outputs of the last SEQ_LEN windows, and
-        # the (frame_id, timestamp_ms, shape) of frames not yet returned
-        self._windows: list[np.ndarray] = []
-        self._pending: list[tuple[int, float, tuple]] = []
+        self._bg_tensor = None
+        self._windows: list[np.ndarray] = []  # model outputs of the last SEQ_LEN windows
+        self._pending: list[tuple[int, float, tuple]] = []  # (frame_id, timestamp_ms, shape) not yet returned
+
+    # -- public -----------------------------------------------------------
+
+    def set_background(self, frame: np.ndarray | None) -> None:
+        """Use this frame (e.g. the median of the video) as the background.
+
+        It is kept across reset(). With None, the first frame seen is used.
+        """
+        self._bg_source = frame
+        self._bg_frame = None
+        self._bg_tensor = None
+
+    def update(self, frame: np.ndarray, frame_id: int, timestamp_ms: float) -> list[BallFrame]:
+        """Push one frame; returns the frames whose result is now final (none
+        or one, SEQ_LEN - 1 frames behind the input)."""
+        self._pending.append((frame_id, timestamp_ms, frame.shape))
+        heatmaps = self._forward(frame)
+        if heatmaps is None:
+            return []
+        self._windows.append(heatmaps)
+        if len(self._windows) > self.SEQ_LEN:
+            self._windows.pop(0)
+        return [self._finish_oldest(0)]
+
+    def flush(self) -> list[BallFrame]:
+        """The frames still waiting for later windows that will never come."""
+        out = []
+        k = 1  # position of the oldest pending frame in the newest window
+        while self._pending:
+            if self._windows and k < self.SEQ_LEN:
+                out.append(self._finish_oldest(k))
+            else:  # fewer than SEQ_LEN frames were ever seen
+                fid, ts, _ = self._pending.pop(0)
+                out.append(BallFrame(frame_id=fid, timestamp_ms=ts))
+            k += 1
+        self._windows.clear()
+        return out
+
+    def reset(self) -> None:
+        self._frame_buffer.clear()
+        self._bg_frame = None
+        self._bg_tensor = None
+        self._windows.clear()
+        self._pending.clear()
+
+    def candidates(self, heatmap: np.ndarray, orig_shape: tuple) -> list[tuple[float, float, float]]:
+        """Ball-sized blobs of a heatmap as (x, y, conf) in original pixels,
+        largest first, at most MAX_CANDIDATES.
+
+        The first one is the detection reported. The others are kept because
+        the largest blob is sometimes a reflection or a spare ball while the
+        real ball is a smaller blob in the same frame; trajectory linking can
+        then pick the one that continues the track.
+        """
+        if heatmap.max() < self.HEATMAP_THRESHOLD:
+            return []
+        h_orig, w_orig = orig_shape[:2]
+        scale_x = w_orig / self.INFER_W
+        scale_y = h_orig / self.INFER_H
+
+        binary = (heatmap >= self.HEATMAP_THRESHOLD).astype(np.uint8)
+        _, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        order = [int(k) + 1 for k in np.argsort(-areas, kind="stable") if areas[k] <= self.MAX_BLOB_AREA]
+        out: list[tuple[float, float, float]] = []
+        for label in order[: self.MAX_CANDIDATES]:
+            cx, cy = centroids[label]
+            conf = float(heatmap[labels == label].max())
+            out.append((float(cx * scale_x), float(cy * scale_y), conf))
+        return out
+
+    # -- internals --------------------------------------------------------
 
     def _ensure_model(self) -> None:
         if self._model is not None:
             return
         import torch
 
-        device = self._device_str or self._auto_device()
+        device = self._device_str or detect_device()
         self._torch_device = torch.device(device)
         self._half = use_half_precision(device)
 
-        # in_dim=27: (SEQ_LEN+1)*3 channels; out_dim=SEQ_LEN: one heatmap per target frame
-        model = _build_tracknet_v3(in_dim=(self.SEQ_LEN + 1) * 3, out_dim=self.SEQ_LEN)
+        model = build_tracknet_v3(in_dim=(self.SEQ_LEN + 1) * 3, out_dim=self.SEQ_LEN)
         state = torch.load(self.model_path, map_location="cpu", weights_only=False)
         # A checkpoint trained at another resolution says so (train_tracknetv3.py --size)
         if isinstance(state, dict) and "infer_size" in state:
@@ -519,40 +236,23 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
             self.INFER_W, self.INFER_H = (int(v) for v in state["infer_size"])
             scale = (self.INFER_W * self.INFER_H) / (cls.INFER_W * cls.INFER_H)
             self.MAX_BLOB_AREA = int(round(cls.MAX_BLOB_AREA * scale))
-        # Support both raw state_dict and wrapped checkpoints
-        if isinstance(state, dict) and "model" in state:
-            state = state["model"]
-        elif isinstance(state, dict) and "model_state_dict" in state:
-            state = state["model_state_dict"]
-        elif isinstance(state, dict) and "state_dict" in state:
-            state = state["state_dict"]
+        # plain state_dict, or wrapped in a checkpoint
+        for key in ("model", "model_state_dict", "state_dict"):
+            if isinstance(state, dict) and key in state:
+                state = state[key]
+                break
         model.load_state_dict(state)
         model.eval()
         model.to(self._torch_device)
         self._model = model
-        logger.info("TrackNet V3 loaded on %s (%dx%d)", device, self.INFER_W, self.INFER_H)
+        logger.info("TrackNetV3 loaded on %s (%dx%d)", device, self.INFER_W, self.INFER_H)
 
-    @staticmethod
-    def _auto_device() -> str:
-        try:
-            import torch
+    def _to_tensor(self, img: np.ndarray) -> torch.Tensor:
+        """HxWx3 uint8 image -> (3, H, W) float tensor in 0..1 on the device."""
+        import torch
 
-            if torch.cuda.is_available():
-                return "cuda"
-            if torch.backends.mps.is_available():
-                return "mps"
-        except Exception:
-            pass
-        return "cpu"
-
-    def set_background(self, frame: np.ndarray | None) -> None:
-        """Use this frame (e.g. the median of the video) as the background.
-
-        It is kept across reset(). Pass None to go back to the first seen frame.
-        """
-        self._bg_source = frame
-        self._bg_frame = None
-        self._bg_tensor = None
+        t = torch.from_numpy(np.ascontiguousarray(img.transpose(2, 0, 1)))
+        return t.to(self._torch_device).float() / 255.0
 
     def _forward(self, frame: np.ndarray) -> np.ndarray | None:
         """Push one frame; heatmaps (SEQ_LEN, H, W) for the last SEQ_LEN frames,
@@ -561,17 +261,11 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
         import torch
 
         # INTER_AREA: the same downscaling the training frames were made with
-        resized = cv2.resize(
-            frame, (self.INFER_W, self.INFER_H), interpolation=cv2.INTER_AREA
-        )
+        resized = cv2.resize(frame, (self.INFER_W, self.INFER_H), interpolation=cv2.INTER_AREA)
 
-        # Background: the one from set_background(), else the first frame
         if self._bg_frame is None:
             if self._bg_source is not None:
-                self._bg_frame = cv2.resize(
-                    self._bg_source, (self.INFER_W, self.INFER_H),
-                    interpolation=cv2.INTER_AREA,
-                )
+                self._bg_frame = cv2.resize(self._bg_source, (self.INFER_W, self.INFER_H), interpolation=cv2.INTER_AREA)
             else:
                 self._bg_frame = resized
 
@@ -582,519 +276,31 @@ class TrackNetV3BallDetectionStrategy(BallDetectionStrategy):
         self._frame_buffer.append(self._to_tensor(resized))
         if len(self._frame_buffer) > self.SEQ_LEN:
             self._frame_buffer.pop(0)
-
-        # Need SEQ_LEN frames to run inference
         if len(self._frame_buffer) < self.SEQ_LEN:
             return None
 
-        # Input: [bg_frame, frame_1, ..., frame_SEQ_LEN] stacked as 27 channels
         tensor = torch.cat([self._bg_tensor] + self._frame_buffer, dim=0).unsqueeze(0)
-
         with torch.inference_mode(), torch.autocast("cuda", enabled=self._half):
-            out = self._model(tensor)  # (1, SEQ_LEN, 288, 512)
+            out = self._model(tensor)  # (1, SEQ_LEN, H, W)
         return out[0].float().cpu().numpy()
 
-    def _to_tensor(self, img: np.ndarray) -> "torch.Tensor":
-        """HxWx3 uint8 image -> (3, H, W) float tensor in 0..1 on the device."""
-        import torch
-
-        t = torch.from_numpy(np.ascontiguousarray(img.transpose(2, 0, 1)))
-        return t.to(self._torch_device).float() / 255.0
-
-    def _to_detection(
-        self, heatmap: np.ndarray, orig_shape: tuple, frame_id: int, timestamp_ms: float
-    ) -> RawBallDetection | None:
-        candidates = self._candidates(heatmap, orig_shape)
-        if not candidates:
-            return None
-        x_pred, y_pred, confidence = candidates[0]
-        r = 4
-        return RawBallDetection(
-            bbox=BoundingBox(
-                x1=float(x_pred - r), y1=float(y_pred - r),
-                x2=float(x_pred + r), y2=float(y_pred + r),
-            ),
-            confidence=float(confidence),
-            frame_id=frame_id,
-            timestamp_ms=timestamp_ms,
-            candidates=candidates,
-        )
-
-    def detect(
-        self, frame: np.ndarray, frame_id: int, timestamp_ms: float
-    ) -> RawBallDetection | None:
-        """Detection for this frame from the newest window only (no delay)."""
-        heatmaps = self._forward(frame)
-        if heatmaps is None:
-            return None
-        # Last channel = current (newest) frame heatmap
-        return self._to_detection(heatmaps[-1], frame.shape, frame_id, timestamp_ms)
-
-    def detect_smoothed(
-        self, frame: np.ndarray, frame_id: int, timestamp_ms: float
-    ) -> list[tuple[int, float, RawBallDetection | None]]:
-        """Like detect(), but each frame's heatmap is the average over every
-        window that contains it (up to SEQ_LEN of them), so the model has seen
-        the frames after it as well as those before.
-
-        Results therefore come SEQ_LEN - 1 frames late: each call returns the
-        frames that are now final, as (frame_id, timestamp_ms, detection), in
-        order. Call flush_smoothed() after the last frame for the rest. Don't
-        mix with detect() on the same stream.
-        """
-        self._pending.append((frame_id, timestamp_ms, frame.shape))
-        heatmaps = self._forward(frame)
-        if heatmaps is None:
-            return []
-        self._windows.append(heatmaps)
-        if len(self._windows) > self.SEQ_LEN:
-            self._windows.pop(0)
-        return [self._finish_oldest(0)]
-
-    def flush_smoothed(self) -> list[tuple[int, float, RawBallDetection | None]]:
-        """The frames still waiting for later windows that will never come."""
-        out = []
-        k = 1  # position of the oldest pending frame in the newest window
-        while self._pending:
-            if self._windows and k < self.SEQ_LEN:
-                out.append(self._finish_oldest(k))
-            else:  # fewer than SEQ_LEN frames were ever seen
-                fid, ts, _ = self._pending.pop(0)
-                out.append((fid, ts, None))
-            k += 1
-        self._windows.clear()
-        return out
-
-    def _finish_oldest(self, k: int) -> tuple[int, float, RawBallDetection | None]:
+    def _finish_oldest(self, k: int) -> BallFrame:
         """Average the heatmaps of the frame at position k of the newest
         window: it is at position k + j of the window j steps older."""
         fid, ts, shape = self._pending.pop(0)
-        maps = [
-            self._windows[-1 - j][k + j]
-            for j in range(len(self._windows))
-            if k + j < self.SEQ_LEN
-        ]
-        return fid, ts, self._to_detection(np.mean(maps, axis=0), shape, fid, ts)
+        maps = [self._windows[-1 - j][k + j] for j in range(len(self._windows)) if k + j < self.SEQ_LEN]
+        return self._to_ball_frame(np.mean(maps, axis=0), shape, fid, ts)
 
-    def _candidates(
-        self,
-        heatmap: np.ndarray,
-        orig_shape: tuple,
-    ) -> list[tuple[float, float, float]]:
-        """Ball-sized blobs of the heatmap as (x, y, conf) in original pixels,
-        largest first, at most MAX_CANDIDATES.
-
-        The first one is the detection Padex reports. The others are kept
-        because the largest blob is sometimes a reflection or a spare ball
-        while the real ball is a smaller blob in the same frame; trajectory
-        linking downstream can then pick the one that continues the track.
-        """
-        if heatmap.max() < self.HEATMAP_THRESHOLD:
-            return []
-        h_orig, w_orig = orig_shape[:2]
-        scale_x = w_orig / self.INFER_W
-        scale_y = h_orig / self.INFER_H
-
-        binary = (heatmap >= self.HEATMAP_THRESHOLD).astype(np.uint8)
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-            binary, connectivity=8
-        )
-        areas = stats[1:, cv2.CC_STAT_AREA]
-        order = [int(k) + 1 for k in np.argsort(-areas, kind="stable")
-                 if areas[k] <= self.MAX_BLOB_AREA]
-        out: list[tuple[float, float, float]] = []
-        for label in order[: self.MAX_CANDIDATES]:
-            cx, cy = centroids[label]
-            conf = float(heatmap[labels == label].max())
-            out.append((float(cx * scale_x), float(cy * scale_y), conf))
-        return out
-
-    def reset(self) -> None:
-        self._frame_buffer.clear()
-        self._bg_frame = None
-        self._bg_tensor = None
-        self._windows.clear()
-        self._pending.clear()
-
-
-# ---------------------------------------------------------------------------
-# SAHI + YOLO ball detection strategy
-# ---------------------------------------------------------------------------
-
-
-class SahiYoloBallDetectionStrategy(BallDetectionStrategy):
-    """Ball detection using SAHI sliced inference with YOLO.
-
-    SAHI slices the image into overlapping patches to detect small objects
-    that would be missed by standard YOLO inference on downscaled frames.
-    """
-
-    BALL_CLASS_ID = 32  # COCO 'sports ball'
-
-    def __init__(
-        self,
-        model_path: str | None = None,
-        confidence_threshold: float = 0.25,
-        slice_size: int = 512,
-        overlap_ratio: float = 0.2,
-        device: str | None = None,
-    ) -> None:
-        if model_path is None:
-            from padex.weights import get_weight_path
-
-            model_path = str(get_weight_path("yolo26m.pt"))
-        self.model_path = model_path
-        self.confidence_threshold = confidence_threshold
-        self.slice_size = slice_size
-        self.overlap_ratio = overlap_ratio
-        self.device = device
-        self._model = None
-
-    def _load_model(self):
-        from sahi import AutoDetectionModel
-
-        return AutoDetectionModel.from_pretrained(
-            model_type="ultralytics",
-            model_path=self.model_path,
-            confidence_threshold=self.confidence_threshold,
-            device=self.device or "",
-        )
-
-    def _ensure_model(self):
-        if self._model is None:
-            self._model = self._load_model()
-
-    def detect(
-        self, frame: np.ndarray, frame_id: int, timestamp_ms: float
-    ) -> RawBallDetection | None:
-        from sahi.predict import get_sliced_prediction
-
-        self._ensure_model()
-
-        # SAHI expects RGB, OpenCV provides BGR
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-        result = get_sliced_prediction(
-            image=frame_rgb,
-            detection_model=self._model,
-            slice_height=self.slice_size,
-            slice_width=self.slice_size,
-            overlap_height_ratio=self.overlap_ratio,
-            overlap_width_ratio=self.overlap_ratio,
-            perform_standard_pred=False,
-            verbose=0,
-        )
-
-        # Filter to ball class only
-        ball_preds = [
-            p
-            for p in result.object_prediction_list
-            if p.category.id == self.BALL_CLASS_ID
-        ]
-
-        if not ball_preds:
-            return None
-
-        # Pick highest confidence detection
-        best = max(ball_preds, key=lambda p: p.score.value)
-        x1, y1, x2, y2 = best.bbox.to_xyxy()
-
-        return RawBallDetection(
-            bbox=BoundingBox(x1=float(x1), y1=float(y1), x2=float(x2), y2=float(y2)),
-            confidence=float(best.score.value),
-            frame_id=frame_id,
-            timestamp_ms=timestamp_ms,
-        )
-
-    def reset(self) -> None:
-        self._model = None
-
-
-# ---------------------------------------------------------------------------
-# Kalman ball tracker
-# ---------------------------------------------------------------------------
-
-
-class KalmanBallTracker(BallTracker):
-    """4D Kalman filter tracking ball in court coordinates.
-
-    State vector: [x, y, vx, vy] in meters.
-    Observation:  [x, y] from YOLO detection projected to court coords.
-    """
-
-    MAX_OCCLUDED_FRAMES: int = 10
-    GATE_DISTANCE_M: float = 3.0
-
-    def __init__(
-        self,
-        process_noise_std: float = 0.5,
-        measurement_noise_std: float = 0.3,
-        homography_matrix: np.ndarray | None = None,
-    ) -> None:
-        self._H_matrix = homography_matrix
-        self._process_noise_std = process_noise_std
-        self._measurement_noise_std = measurement_noise_std
-        self._kf: cv2.KalmanFilter | None = None
-        self._initialized = False
-        self._occluded_count = 0
-
-    def _build_kalman(self) -> cv2.KalmanFilter:
-        kf = cv2.KalmanFilter(4, 2)
-        # Constant velocity model
-        kf.transitionMatrix = np.array(
-            [[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]],
-            dtype=np.float32,
-        )
-        kf.measurementMatrix = np.array(
-            [[1, 0, 0, 0], [0, 1, 0, 0]], dtype=np.float32
-        )
-        kf.processNoiseCov = (
-            np.eye(4, dtype=np.float32) * self._process_noise_std**2
-        )
-        kf.measurementNoiseCov = (
-            np.eye(2, dtype=np.float32) * self._measurement_noise_std**2
-        )
-        kf.errorCovPost = np.eye(4, dtype=np.float32)
-        return kf
-
-    def set_homography(self, H: np.ndarray | None) -> None:
-        self._H_matrix = H
-
-    def update(
-        self, detection: RawBallDetection | None, timestamp_ms: float
-    ) -> tuple[Position3D | None, BallVisibility]:
-        if detection is None:
-            return self._handle_missing()
-
-        # Project bbox center to court coordinates
-        court_xy = self._bbox_center_to_court(detection.bbox)
-        if court_xy is None:
-            return self._handle_missing()
-
-        x_m, y_m = court_xy
-
-        # Initialize on first detection
-        if not self._initialized or self._kf is None:
-            self._kf = self._build_kalman()
-            self._kf.statePost = np.array(
-                [x_m, y_m, 0, 0], dtype=np.float32
-            ).reshape(4, 1)
-            self._initialized = True
-            self._occluded_count = 0
-            return self._clamp_to_court(x_m, y_m), BallVisibility.VISIBLE
-
-        # Gate: reject detections far from prediction
-        prediction = self._kf.predict()
-        pred_x, pred_y = float(prediction[0, 0]), float(prediction[1, 0])
-        dist = np.sqrt((pred_x - x_m) ** 2 + (pred_y - y_m) ** 2)
-        if dist > self.GATE_DISTANCE_M:
-            # Ghost detection (glass reflection) — use prediction instead
-            self._occluded_count += 1
-            if self._occluded_count > self.MAX_OCCLUDED_FRAMES:
-                self.reset()
-                return None, BallVisibility.OCCLUDED
-            return self._clamp_to_court(pred_x, pred_y), BallVisibility.INFERRED
-
-        # Normal update: predict + correct
-        measurement = np.array([[x_m], [y_m]], dtype=np.float32)
-        corrected = self._kf.correct(measurement)
-        self._occluded_count = 0
-        cx, cy = float(corrected[0, 0]), float(corrected[1, 0])
-        return self._clamp_to_court(cx, cy), BallVisibility.VISIBLE
-
-    def reset(self) -> None:
-        self._kf = None
-        self._initialized = False
-        self._occluded_count = 0
-
-    def _handle_missing(self) -> tuple[Position3D | None, BallVisibility]:
-        if not self._initialized or self._kf is None:
-            return None, BallVisibility.OCCLUDED
-
-        prediction = self._kf.predict()
-        self._occluded_count += 1
-
-        if self._occluded_count > self.MAX_OCCLUDED_FRAMES:
-            self.reset()
-            return None, BallVisibility.OCCLUDED
-
-        x, y = float(prediction[0, 0]), float(prediction[1, 0])
-        return self._clamp_to_court(x, y), BallVisibility.INFERRED
-
-    def _bbox_center_to_court(
-        self, bbox: BoundingBox
-    ) -> tuple[float, float] | None:
-        """Project bbox center from pixel to court coordinates."""
-        if self._H_matrix is None:
-            return None
-
-        cx = (bbox.x1 + bbox.x2) / 2.0
-        cy = (bbox.y1 + bbox.y2) / 2.0
-        pt = np.array([[[cx, cy]]], dtype=np.float64)
-        result = cv2.perspectiveTransform(pt, self._H_matrix)
-        x, y = float(result[0, 0, 0]), float(result[0, 0, 1])
-        return (x, y)
-
-    @staticmethod
-    def _clamp_to_court(x: float, y: float) -> Position3D:
-        """Clamp position to valid court bounds and return Position3D."""
-        x_c = max(0.0, min(10.0, x))
-        y_c = max(0.0, min(20.0, y))
-        return Position3D(x=x_c, y=y_c, z=0.0)
-
-
-# ---------------------------------------------------------------------------
-# BallDetector facade
-# ---------------------------------------------------------------------------
-
-
-class BallDetector:
-    """Main ball detection + tracking facade.
-
-    Combines SAHI-based detection with Kalman filter tracking.
-    """
-
-    def __init__(
-        self,
-        detection_strategy: BallDetectionStrategy | None = None,
-        tracker: BallTracker | None = None,
-        model_path: str | None = None,
-        confidence_threshold: float = 0.25,
-        use_tracknet: bool = True,
-        use_tracknet_v3: bool = False,
-    ) -> None:
-        if detection_strategy is not None:
-            self.detection_strategy = detection_strategy
-        elif use_tracknet_v3:
-            self.detection_strategy = TrackNetV3BallDetectionStrategy(
-                model_path=model_path,
-            )
-        elif use_tracknet:
-            self.detection_strategy = TrackNetBallDetectionStrategy(
-                model_path=model_path,
-            )
-        else:
-            self.detection_strategy = SahiYoloBallDetectionStrategy(
-                model_path=model_path,
-                confidence_threshold=confidence_threshold,
-            )
-        self.tracker = tracker or KalmanBallTracker()
-
-    def detect(
-        self,
-        frame: np.ndarray,
-        frame_id: int,
-        timestamp_ms: float,
-    ) -> BallFrame:
-        """Detect ball in a single frame (no cross-frame tracking)."""
-        raw = self.detection_strategy.detect(frame, frame_id, timestamp_ms)
+    def _to_ball_frame(self, heatmap: np.ndarray, orig_shape: tuple, frame_id: int, timestamp_ms: float) -> BallFrame:
+        candidates = self.candidates(heatmap, orig_shape)
+        if not candidates:
+            return BallFrame(frame_id=frame_id, timestamp_ms=timestamp_ms)
+        x, y, confidence = candidates[0]
+        r = BALL_BOX_RADIUS
         return BallFrame(
             frame_id=frame_id,
             timestamp_ms=timestamp_ms,
-            bbox=raw.bbox if raw else None,
-            position=None,
-            confidence=raw.confidence if raw else 0.0,
-            visibility=BallVisibility.VISIBLE if raw else BallVisibility.OCCLUDED,
-            candidates=raw.candidates if raw else [],
+            bbox=BoundingBox(x1=float(x - r), y1=float(y - r), x2=float(x + r), y2=float(y + r)),
+            confidence=float(confidence),
+            candidates=candidates,
         )
-
-    def detect_and_track_single(
-        self,
-        frame: np.ndarray,
-        frame_id: int,
-        timestamp_ms: float,
-    ) -> BallFrame:
-        """Detect and track ball in a single frame (streaming mode).
-
-        Uses the Kalman tracker for cross-frame state. Call frames in order.
-        """
-        raw = self.detection_strategy.detect(frame, frame_id, timestamp_ms)
-        position, visibility = self.tracker.update(raw, timestamp_ms)
-        return BallFrame(
-            frame_id=frame_id,
-            timestamp_ms=timestamp_ms,
-            bbox=raw.bbox if raw else None,
-            position=position,
-            confidence=raw.confidence if raw else 0.0,
-            visibility=visibility,
-            candidates=raw.candidates if raw else [],
-        )
-
-    def detect_and_track_smoothed(
-        self,
-        frame: np.ndarray,
-        frame_id: int,
-        timestamp_ms: float,
-    ) -> list[BallFrame]:
-        """Streaming mode with temporal smoothing where the detector has it
-        (TrackNet V3 averages overlapping windows, which is more accurate
-        than its newest-frame output).
-
-        Returns the frames that are final after this call: none or one, a few
-        frames behind the input. Call flush() after the last frame. Detectors
-        without smoothing return this frame's result straight away.
-        """
-        smoothed = getattr(self.detection_strategy, "detect_smoothed", None)
-        if smoothed is None:
-            return [self.detect_and_track_single(frame, frame_id, timestamp_ms)]
-        return [self._tracked(fid, ts, raw) for fid, ts, raw in smoothed(frame, frame_id, timestamp_ms)]
-
-    def flush(self) -> list[BallFrame]:
-        """Remaining frames of detect_and_track_smoothed() at the end of the video."""
-        flush = getattr(self.detection_strategy, "flush_smoothed", None)
-        return [self._tracked(fid, ts, raw) for fid, ts, raw in flush()] if flush else []
-
-    def _tracked(
-        self, frame_id: int, timestamp_ms: float, raw: RawBallDetection | None
-    ) -> BallFrame:
-        position, visibility = self.tracker.update(raw, timestamp_ms)
-        return BallFrame(
-            frame_id=frame_id,
-            timestamp_ms=timestamp_ms,
-            bbox=raw.bbox if raw else None,
-            position=position,
-            confidence=raw.confidence if raw else 0.0,
-            visibility=visibility,
-            candidates=raw.candidates if raw else [],
-        )
-
-    def track(
-        self,
-        frames: list[tuple[int, float, np.ndarray]],
-        homography_matrix: np.ndarray | None = None,
-    ) -> list[BallFrame]:
-        """Track ball across multiple frames with Kalman gap-filling.
-
-        Args:
-            frames: list of (frame_id, timestamp_ms, frame_array).
-            homography_matrix: pixel-to-court transform for Position3D.
-
-        Returns:
-            list[BallFrame] with visibility states and interpolated positions.
-        """
-        if homography_matrix is not None:
-            self.tracker.set_homography(homography_matrix)
-
-        ball_frames: list[BallFrame] = []
-        for frame_id, timestamp_ms, frame in frames:
-            raw = self.detection_strategy.detect(frame, frame_id, timestamp_ms)
-            position, visibility = self.tracker.update(raw, timestamp_ms)
-
-            ball_frames.append(
-                BallFrame(
-                    frame_id=frame_id,
-                    timestamp_ms=timestamp_ms,
-                    bbox=raw.bbox if raw else None,
-                    position=position,
-                    confidence=raw.confidence if raw else 0.0,
-                    visibility=visibility,
-                    candidates=raw.candidates if raw else [],
-                )
-            )
-
-        return ball_frames
-
-    def reset(self) -> None:
-        """Reset detector and tracker state."""
-        self.detection_strategy.reset()
-        self.tracker.reset()

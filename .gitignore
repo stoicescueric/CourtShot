@@ -219,3 +219,14 @@ output/
 data/
 
 .DS_Store
+
+# Made next to each video by `padex run`: tracking cache, its key, the
+# appearance vectors and the 3D ball fit (plus copies set aside)
+*_tracking_cache*
+*_calibration_prev.json
+
+# Run and training logs, training frame caches, downloaded base weights
+logs/
+cache/
+cache_own_*/
+ckpts/
