@@ -12,9 +12,20 @@ Padel is a fast-growing sport with virtually no open-source analytics tooling. U
 
 Padel's enclosed court (glass walls + metal fences), fixed dimensions (20m × 10m), and 4-player format make it uniquely tractable for CV-based tracking compared to football's 22 players on a large open pitch. However, padel introduces its own challenges: glass reflections causing ghost detections, small fast-moving balls, and wall bounces creating complex 3D trajectories.
 
+## Current State of the Code
+
+The sections below ("Architecture", "Data Schema", "File Structure Per Match") describe the design the project is heading for. The code that exists today is the working pipeline only; see "Package Structure" for where things are. The differences that matter:
+
+- **Layer 1** is `padex.tracking`: YOLO + ByteTrack for people, YOLO-Pose, and a fine-tuned TrackNetV3 for the ball. SAM3 is not used. Court calibration is interactive (`padex calibrate`); there is no automatic court detection. Team assignment comes from the identity step (near pair = T_1, far pair = T_2 at the seed frame), not from jersey colours.
+- **Layer 2** is `padex.analysis`: stable player identities, ball events (hits, floor and wall bounces) found in image space, 3D ball flights fitted with a physics model, and rule-based shot types. Bounce types are "ground" and "wall" only; bandeja and víbora are one class.
+- **Layer 3** is `padex.analysis.movement` and `padex.report`: movement and formation statistics, the HTML match report and the 3D replay.
+- **Storage**: tracking is cached as a pickle next to the video (`<video>_tracking_cache.pkl`); the videos, their calibration JSONs and caches live in `videos/`; outputs are CSV, JSON and HTML in `output/<video>/`. The Parquet / JSONL match folder of the schema document is not implemented.
+- **Running it**: `uv run python -m padex run <video>` (on this Windows machine the `padex` console script is blocked by Application Control, so use `python -m padex`).
+- **Verifying changes**: the report and replay are deterministic. After a refactor, `python -m padex report` on an existing tracking cache must give byte-identical `summary.json`, `shots.csv`, `ball_events.csv` and `positions.csv`.
+
 ## Architecture — Three Layers
 
-The system is organized into three layers, each building on the previous. This maps directly to the package structure.
+The system is organized into three layers, each building on the previous.
 
 ### Layer 1: `padex.tracking` — Raw Tracking Engine
 
@@ -83,7 +94,7 @@ Storage: **JSON**
 
 ## Data Schema
 
-The full data schema specification is defined in `padel_data_schema_v0.1.0.docx` (versioned alongside this document). This is the contract for all data flowing between layers.
+The full data schema specification is defined in `docs/padel_data_schema_v0.1.0.docx` (versioned alongside this document). This is the contract for all data flowing between layers.
 
 Key design decisions:
 - **Coordinate system**: Origin at bottom-left corner, x = 0–10m (width), y = 0–20m (length), z = height (optional). Net at y = 10.0.
@@ -121,50 +132,54 @@ match_20260301_teamA_vs_teamB/
 
 ## Package Structure
 
+This is the code as it is (not the target design):
+
 ```
 padex/
 ├── pyproject.toml
 ├── README.md
 ├── CLAUDE.md
+├── run_match.sh               # `python -m padex run` with a log file
+├── checkpoints/               # fine-tuned TrackNetV3 ball model
 ├── src/
 │   └── padex/
-│       ├── __init__.py
-│       ├── tracking/          # Layer 1
-│       │   ├── __init__.py
-│       │   ├── player.py      # Player detection + pose
-│       │   ├── ball.py        # Ball detection + trajectory
-│       │   ├── court.py       # Court detection + homography
-│       │   └── pipeline.py    # Orchestrates full tracking
-│       ├── events/            # Layer 2
-│       │   ├── __init__.py
-│       │   ├── shot.py        # Shot detection + classification
-│       │   ├── bounce.py      # Bounce/wall interaction detection
-│       │   ├── point.py       # Point/rally segmentation
-│       │   └── taxonomy.py    # Shot type definitions + enums
-│       ├── tactics/           # Layer 3
-│       │   ├── __init__.py
-│       │   ├── metrics.py     # Metric computation
-│       │   ├── heatmap.py     # Spatial analysis
-│       │   └── report.py      # Match report generation
-│       ├── schemas/           # Data contracts
-│       │   ├── __init__.py
-│       │   ├── tracking.py    # Pydantic models for Layer 1
-│       │   ├── events.py      # Pydantic models for Layer 2
-│       │   └── tactics.py     # Pydantic models for Layer 3
-│       ├── io/                # Data I/O
-│       │   ├── __init__.py
-│       │   ├── parquet.py     # Parquet read/write
-│       │   ├── jsonl.py       # JSONL read/write
-│       │   └── video.py       # Video frame extraction
-│       └── viz/               # Visualization
-│           ├── __init__.py
-│           ├── court.py       # Court rendering
-│           ├── animation.py   # Rally replay
-│           └── dashboard.py   # Match overview
+│       ├── pipeline.py        # Padex: track -> analyse -> outputs
+│       ├── cli.py             # padex calibrate | run | report | replay
+│       ├── court.py           # Court model + homography
+│       ├── calibration.py     # Interactive court calibration
+│       ├── weights.py         # YOLO weight download
+│       ├── schemas/
+│       │   └── tracking.py    # PlayerFrame, BallFrame, CourtCalibration
+│       ├── io/
+│       │   └── video.py       # Video reader / writer
+│       ├── tracking/          # Layer 1: video -> raw tracking (GPU)
+│       │   ├── player.py      # People (YOLO + ByteTrack) + pose
+│       │   ├── ball.py        # TrackNetV3 ball detector
+│       │   ├── pipeline.py    # Runs both over a video; TrackingResult
+│       │   ├── cache.py       # Tracking cache + its key
+│       │   └── device.py      # GPU / precision / threading switches
+│       ├── analysis/          # Layer 2 (+ movement metrics of Layer 3)
+│       │   ├── identities.py  # Four stable player IDs
+│       │   ├── appearance.py  # Player appearance vectors (SigLIP)
+│       │   ├── ball_events.py # Hits, floor and wall bounces (2D)
+│       │   ├── ball_flight.py # 3D ball flights (physics fit)
+│       │   ├── swing.py       # Hitter's pose around a hit
+│       │   ├── shots.py       # Shot types, rally endings
+│       │   ├── movement.py    # Distance, speed, zones, formations
+│       │   └── match.py       # All of it for one tracking cache
+│       ├── report/            # Layer 3 outputs
+│       │   ├── match_report.py
+│       │   ├── scene3d.py     # 3D replay
+│       │   └── templates/     # report.html, scene3d.html
+│       └── viz/               # Drawing on video frames
+│           ├── frame.py
+│           └── mini_court.py
+├── tools/                     # Ball labelling and training, checks
 ├── tests/
-├── docs/
 └── examples/
 ```
+
+`padex.schemas.tracking` and `padex.tracking.pipeline.TrackingResult` are what tracking caches are pickles of: moving or renaming those classes breaks every existing cache.
 
 ## Development Priorities
 

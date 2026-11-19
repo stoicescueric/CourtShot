@@ -1,61 +1,39 @@
 """
-Padex Quickstart
-================
+Padex quickstart: one padel match video in, tracked video + report + 3D replay out.
 
-This example shows how to analyze a padel match video using Padex.
+Run from the padex folder:
 
-Prerequisites:
-    pip install padex
-    # or: uv add padex
+    uv run python examples/quickstart.py path/to/match.mp4
 
-Steps:
-    1. First run: interactive calibration UI opens (click court keypoints)
-    2. Calibration is saved next to the video for future runs
-    3. Pipeline runs: tracking → bounce detection → shot classification
-    4. Annotated video is exported with shot type labels
+The same from the command line:
+
+    uv run python -m padex calibrate path/to/match.mp4
+    uv run python -m padex run path/to/match.mp4
 """
+
+import logging
+import sys
+from pathlib import Path
 
 import padex
 
-# ── Path to your padel match video ──────────────────────────────────────
-VIDEO = "path/to/your/match.mp4"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+video = Path(sys.argv[1] if len(sys.argv) > 1 else "videos/match.mp4")
 
-# ── Step 1: Court calibration (only needed once per camera angle) ───────
-#
-# If no calibration file exists next to the video, run interactive
-# calibration first. A window will open where you click court keypoints.
-#
-# The result is saved as <video_stem>_calibration.json and reused
-# automatically on future runs.
+# 1. Court calibration, once per camera position: a window opens, click the
+#    court keypoints. It is saved next to the video as <name>_calibration.json
+#    and found there on later runs.
+if not video.with_name(video.stem + "_calibration.json").exists() and padex.interactive_calibrate(video) is None:
+    sys.exit("Calibration cancelled.")
 
-cal = padex.interactive_calibrate(VIDEO)
-# Or skip this step if you already have a calibration file:
-# cal = "path/to/match_calibration.json"
+p = padex.Padex(video)
 
-# ── Step 2: Run the full pipeline ───────────────────────────────────────
+# 2. Everything in one go: writes output/<name>/<name>_tracked.mp4, report.html, scene3d.html
+print(p.run())
 
-result = padex.process(VIDEO, calibration=cal)
-
-print(f"Detected {len(result.shots)} shots and {len(result.bounces)} bounces")
-for shot in result.shots:
-    print(f"  {shot.shot_type.value:20s} | player={shot.player_id} | t={shot.timestamp_ms:.0f}ms")
-
-# ── Step 3: Export annotated video ──────────────────────────────────────
-
-padex.export_video(result, VIDEO, "output/annotated.mp4")
-print("Annotated video saved to output/annotated.mp4")
-
-
-# ── Alternative: CLI usage ──────────────────────────────────────────────
-#
-# From the command line, you can do everything in one command:
-#
-#   padex process path/to/match.mp4
-#
-# This will auto-launch calibration if needed, then run the pipeline
-# and export an annotated video to output/<timestamp>/shot_detection.mp4
-#
-# To calibrate separately:
-#
-#   padex calibrate path/to/match.mp4 -o my_calibration.json
-#   padex process path/to/match.mp4 --calibration my_calibration.json
+# ... or step by step, to work with the data yourself:
+analysis = p.analyse()  # tracking (cached next to the video) -> players, ball events, 3D flights
+print(f"{analysis.fps:.0f} fps, {len(analysis.tracking.player_frames)} player frames")
+if analysis.ball is not None:
+    for shot in analysis.ball.shots[:10]:
+        print(f"{shot.time_s:7.2f} s  {shot.player} ({shot.team})  landed at {shot.landing}")

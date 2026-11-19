@@ -1,24 +1,27 @@
 """
-Tests for the guards around reused results and player candidates:
+Tests for the guards around reused results:
   - a tracking cache / 3D fit is only reused for the inputs it was made from
+  - caches made by earlier versions still load
   - the static-ball filter counts occupancy near in time, not over the video
-  - the player cap is configurable; pose can come from close-ups only
 """
 
 from __future__ import annotations
 
+import enum
 import json
 import os
 import pickle
+import sys
+import types
 
-import ball_track as bt
-import export_scene3d as scene
-import numpy as np
+import pytest
 
+from padex.analysis import ball_events as bt
+from padex.analysis import match
 from padex.pipeline import Padex
-from padex.schemas.tracking import BoundingBox, CourtCalibration
+from padex.schemas.tracking import BallFrame, BoundingBox, CourtCalibration
+from padex.tracking import cache as tracking_cache
 from padex.tracking.pipeline import TrackingResult
-from padex.tracking.player import PlayerDetector, RawDetection
 
 
 def _calibration(scale: float = 1.0) -> CourtCalibration:
@@ -39,60 +42,124 @@ class TestTrackingCacheKey:
         video = tmp_path / "clip.mp4"
         if not video.exists():
             video.write_bytes(b"not really a video")
+        model = tmp_path / "ball.pt"
+        if not model.exists():
+            model.write_bytes(b"weights")
         kwargs.setdefault("calibration", _calibration())
+        kwargs.setdefault("ball_model_path", model)
         return Padex(video, **kwargs)
 
-    def _save_cache(self, p: Padex, tmp_path) -> None:
-        cache = tmp_path / "clip_tracking_cache.pkl"
-        with open(cache, "wb") as f:
-            pickle.dump(TrackingResult(), f)
-        cache.with_suffix(".key.json").write_text(json.dumps(p._tracking_key()))
+    def _save_cache(self, p: Padex) -> None:
+        tracking_cache.save_tracking(TrackingResult(), p.cache_path, p.tracking_key())
 
     def test_same_inputs_reuse_the_cache(self, tmp_path):
-        p = self._padex(tmp_path)
-        self._save_cache(p, tmp_path)
+        self._save_cache(self._padex(tmp_path))
         again = self._padex(tmp_path)
-        assert isinstance(again._run_tracking(), TrackingResult)
+        assert isinstance(again.track(), TrackingResult)
         assert again.tracking_from_cache
 
     def test_key_changes_with_each_input(self, tmp_path):
-        base = self._padex(tmp_path)._tracking_key()
-        model = tmp_path / "ball.pt"
-        model.write_bytes(b"weights")
-        assert (
-            self._padex(tmp_path, calibration=_calibration(2.0))._tracking_key() != base
-        )
-        assert self._padex(tmp_path, ball_model_path=model)._tracking_key() != base
-        assert self._padex(tmp_path, use_tracknet_v3=True)._tracking_key() != base
-        assert self._padex(tmp_path, max_players=8)._tracking_key() != base
+        base = self._padex(tmp_path).tracking_key()
+        other_model = tmp_path / "other_ball.pt"
+        other_model.write_bytes(b"weights")
+        assert self._padex(tmp_path, calibration=_calibration(2.0)).tracking_key() != base
+        assert self._padex(tmp_path, ball_model_path=other_model).tracking_key() != base
+        assert self._padex(tmp_path, enable_pose=False).tracking_key() != base
+        assert self._padex(tmp_path, max_players=4).tracking_key() != base
 
     def test_key_changes_with_pose_mode(self, tmp_path, monkeypatch):
-        base = self._padex(tmp_path)._tracking_key()
+        base = self._padex(tmp_path).tracking_key()
         monkeypatch.setenv("PADEX_POSE_CLOSEUPS", "1")
-        assert self._padex(tmp_path)._tracking_key() != base
+        assert self._padex(tmp_path).tracking_key() != base
 
     def test_retrained_model_under_the_same_name_changes_the_key(self, tmp_path):
-        model = tmp_path / "ball.pt"
-        model.write_bytes(b"weights")
-        before = self._padex(tmp_path, ball_model_path=model)._tracking_key()
-        model.write_bytes(b"other weights")
-        assert self._padex(tmp_path, ball_model_path=model)._tracking_key() != before
+        before = self._padex(tmp_path).tracking_key()
+        (tmp_path / "ball.pt").write_bytes(b"other weights")
+        assert self._padex(tmp_path).tracking_key() != before
 
     def test_stale_reason_names_what_changed(self, tmp_path):
         p = self._padex(tmp_path)
-        self._save_cache(p, tmp_path)
+        self._save_cache(p)
         other = self._padex(tmp_path, calibration=_calibration(2.0))
-        key_path = tmp_path / "clip_tracking_cache.key.json"
-        reason = Padex._stale_reason(key_path, other._tracking_key())
+        reason = tracking_cache.stale_reason(p.cache_path, other.tracking_key())
         assert reason is not None and "calibration_sha1" in reason
-        assert Padex._stale_reason(key_path, p._tracking_key()) is None
+        assert tracking_cache.stale_reason(p.cache_path, p.tracking_key()) is None
+
+    def test_stale_cache_is_set_aside_not_deleted(self, tmp_path):
+        p = self._padex(tmp_path)
+        self._save_cache(p)
+        other = self._padex(tmp_path, calibration=_calibration(2.0))
+        tracking_cache.set_aside_if_stale(other.cache_path, other.tracking_key())
+        assert not p.cache_path.exists()
+        assert (tmp_path / "clip_tracking_cache.old.pkl").exists()
 
     def test_cache_without_a_key_is_still_used(self, tmp_path):
         p = self._padex(tmp_path)
-        with open(tmp_path / "clip_tracking_cache.pkl", "wb") as f:
+        with open(p.cache_path, "wb") as f:
             pickle.dump(TrackingResult(), f)
-        assert isinstance(p._run_tracking(), TrackingResult)
+        assert isinstance(p.track(), TrackingResult)
         assert p.tracking_from_cache
+
+    def test_missing_calibration_or_ball_model_is_reported(self, tmp_path):
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"not really a video")
+        with pytest.raises(ValueError, match="calibrat"):
+            Padex(video, ball_model_path=video)  # no clip_calibration.json next to it
+        with pytest.raises(FileNotFoundError, match="Ball model"):
+            Padex(video, calibration=_calibration(), ball_model_path=tmp_path / "nope.pt")
+
+
+class TestOlderCaches:
+    def test_cache_with_the_ball_fields_that_are_gone_still_loads(self, tmp_path, monkeypatch):
+        """Tracking caches made before BallFrame lost its floor position and
+        visibility state hold instances of two classes that no longer exist."""
+        import padex.schemas.tracking as schema
+
+        class BallVisibility(enum.StrEnum):
+            VISIBLE = "visible"
+
+        class Position3D(schema.BaseModel):
+            x: float
+            y: float
+            z: float = 0.0
+
+        class OldBallFrame(schema.BallFrame):
+            position: Position3D | None = None
+            visibility: BallVisibility = BallVisibility.VISIBLE
+
+        for cls in (BallVisibility, Position3D):
+            cls.__module__, cls.__qualname__ = "padex.schemas.tracking", cls.__name__
+            monkeypatch.setattr(schema, cls.__name__, cls, raising=False)
+        OldBallFrame.__module__, OldBallFrame.__qualname__ = "padex.schemas.tracking", "BallFrame"
+        new_ball_frame = schema.BallFrame
+        monkeypatch.setattr(schema, "BallFrame", OldBallFrame)
+
+        old = TrackingResult(
+            ball_frames=[
+                OldBallFrame(
+                    frame_id=3,
+                    timestamp_ms=120.0,
+                    bbox=BoundingBox(x1=1, y1=2, x2=9, y2=10),
+                    confidence=0.7,
+                    position=Position3D(x=5.0, y=10.0),
+                    candidates=[(5.0, 6.0, 0.7)],
+                )
+            ]
+        )
+        path = tmp_path / "old_tracking_cache.pkl"
+        with open(path, "wb") as f:
+            pickle.dump(old, f)
+
+        # back to today's schema: the two classes are gone
+        monkeypatch.setattr(schema, "BallFrame", new_ball_frame)
+        monkeypatch.delattr(schema, "BallVisibility")
+        monkeypatch.delattr(schema, "Position3D")
+        with pytest.raises(AttributeError):
+            pickle.loads(path.read_bytes())
+
+        bf = tracking_cache.load_tracking(path).ball_frames[0]
+        assert isinstance(bf, BallFrame)
+        assert (bf.frame_id, bf.confidence, bf.bbox.x2, bf.candidates) == (3, 0.7, 9.0, [(5.0, 6.0, 0.7)])
 
 
 # ---------------------------------------------------------------------------
@@ -104,36 +171,68 @@ class TestBall3dCacheKey:
     def _files(self, tmp_path):
         tracking = tmp_path / "clip_tracking_cache.pkl"
         tracking.write_bytes(b"tracking v1")
-        fit = tmp_path / "clip_tracking_cache_ball3d.pkl"
+        fit = match.fit_path(tracking)
         fit.write_bytes(b"fit")
         return tracking, fit
 
+    def test_fit_sits_next_to_the_tracking_cache(self, tmp_path):
+        tracking, fit = self._files(tmp_path)
+        assert fit == tmp_path / "clip_tracking_cache_ball3d.pkl"
+
     def test_fit_is_reused_for_the_tracking_it_was_made_from(self, tmp_path):
         tracking, fit = self._files(tmp_path)
-        key = scene.fit_key(tracking, 25.0)
-        scene.key_path(fit).write_text(json.dumps(key))
-        assert scene.stale_reason(fit, tracking, scene.fit_key(tracking, 25.0)) is None
+        key = match.fit_key(tracking, 25.0)
+        match.key_path(fit).write_text(json.dumps(key))
+        assert match.stale_reason(fit, tracking, match.fit_key(tracking, 25.0)) is None
 
     def test_fit_is_not_reused_after_retracking(self, tmp_path):
         tracking, fit = self._files(tmp_path)
-        scene.key_path(fit).write_text(json.dumps(scene.fit_key(tracking, 25.0)))
+        match.key_path(fit).write_text(json.dumps(match.fit_key(tracking, 25.0)))
         tracking.write_bytes(b"tracking v2")
-        reason = scene.stale_reason(fit, tracking, scene.fit_key(tracking, 25.0))
+        reason = match.stale_reason(fit, tracking, match.fit_key(tracking, 25.0))
         assert reason is not None and "tracking_sha1" in reason
 
     def test_old_fit_without_key_goes_by_file_age(self, tmp_path):
         tracking, fit = self._files(tmp_path)
-        key = scene.fit_key(tracking, 25.0)
+        key = match.fit_key(tracking, 25.0)
         os.utime(fit, (1_000_000, 1_000_000))
         os.utime(tracking, (2_000_000, 2_000_000))
-        assert scene.stale_reason(fit, tracking, key) is not None
+        assert match.stale_reason(fit, tracking, key) is not None
         os.utime(fit, (3_000_000, 3_000_000))
-        assert scene.stale_reason(fit, tracking, key) is None
+        assert match.stale_reason(fit, tracking, key) is None
 
     def test_missing_fit(self, tmp_path):
         tracking, fit = self._files(tmp_path)
         fit.unlink()
-        assert scene.stale_reason(fit, tracking, {}) == "missing"
+        assert match.stale_reason(fit, tracking, {}) == "missing"
+
+    def test_fit_saved_by_an_earlier_version_is_fitted_again(self, tmp_path, monkeypatch):
+        """A fit pickled when the 3D code was a top-level script names a
+        module that is gone; it must be redone, not crash the run."""
+        tracking, fit = self._files(tmp_path)
+        gone = types.ModuleType("ball3d_of_an_earlier_version")
+
+        class Ball3DResult:
+            flights = ()
+
+        Ball3DResult.__module__, Ball3DResult.__qualname__ = gone.__name__, "Ball3DResult"
+        gone.Ball3DResult = Ball3DResult
+        monkeypatch.setitem(sys.modules, gone.__name__, gone)
+        with open(fit, "wb") as f:
+            pickle.dump(Ball3DResult(), f)
+        monkeypatch.delitem(sys.modules, gone.__name__)
+
+        key = match.fit_key(tracking, 25.0)
+        key["player_ids"] = repr(match.StableIdConfig()) + " swaps []"
+        match.key_path(fit).write_text(json.dumps(key))
+        refits = []
+        monkeypatch.setattr(
+            match.ball_flight,
+            "run_on_tracking",
+            lambda stable, ball, fps: refits.append(1) or types.SimpleNamespace(flights=[]),
+        )
+        result = match.ball3d_for(tracking, stable=None, ball=None, fps=25.0, id_report={})
+        assert refits == [1] and result.flights == []
 
 
 # ---------------------------------------------------------------------------
@@ -166,98 +265,3 @@ class TestDropStatic:
         out = bt.drop_static(det, self.H, self.FPS, bt.BallSettings())
         assert len(out) == 90
         assert all(ps == [(100.0 + 12.0 * f, 300.0)] for f, ps in out.items())
-
-
-# ---------------------------------------------------------------------------
-# player candidates and pose mode
-# ---------------------------------------------------------------------------
-
-
-def _det(x: float, conf: float) -> RawDetection:
-    return RawDetection(
-        bbox=BoundingBox(x1=x, y1=0.0, x2=x + 0.5, y2=5.0), confidence=conf
-    )
-
-
-class _FixedDetections:
-    def __init__(self, dets):
-        self.dets = dets
-
-    def detect(self, frame, frame_id, timestamp_ms):
-        return list(self.dets)
-
-
-class _NoTeams:
-    def classify(self, detections, frame):
-        return {}
-
-
-class _RecordingPose:
-    """Stands in for YoloPoseEstimationStrategy; records how it was called."""
-
-    def __init__(self):
-        self.full_frame_runs = 0
-        self.estimate_kwargs = []
-
-    def predict_full_frame(self, frame):
-        self.full_frame_runs += 1
-        return None
-
-    def estimate(self, frame, bboxes, **kwargs):
-        self.estimate_kwargs.append(kwargs)
-        return [[] for _ in bboxes]
-
-
-def _detector(dets, pose=None, max_players=None, **kwargs) -> PlayerDetector:
-    strategy = _FixedDetections(dets)
-    strategy.detect_with_tracking = strategy.detect
-    return PlayerDetector(
-        detection_strategy=strategy,
-        team_classifier=_NoTeams(),
-        pose_strategy=pose,
-        max_players=max_players,
-        **kwargs,
-    )
-
-
-class TestPlayerCap:
-    FRAME = np.zeros((8, 8, 3), np.uint8)
-    DETS = [_det(float(i), 0.9 - 0.1 * i) for i in range(6)]
-
-    def test_default_keeps_the_four_most_confident(self):
-        out = _detector(self.DETS).detect(self.FRAME, 0, 0.0, np.eye(3))
-        assert [round(pf.confidence, 1) for pf in out] == [0.9, 0.8, 0.7, 0.6]
-
-    def test_higher_cap_keeps_the_extra_candidates(self):
-        out = _detector(self.DETS, max_players=8).detect(self.FRAME, 0, 0.0, np.eye(3))
-        assert len(out) == 6
-
-    def test_cap_does_not_leak_between_detectors(self):
-        _detector(self.DETS, max_players=8)
-        assert PlayerDetector.MAX_PLAYERS == 4
-        assert len(_detector(self.DETS).detect(self.FRAME, 0, 0.0, np.eye(3))) == 4
-
-
-class TestPoseCloseupsOnly:
-    FRAME = np.zeros((8, 8, 3), np.uint8)
-    DETS = [_det(1.0, 0.9)]
-
-    def test_default_runs_the_full_frame_pass_once(self):
-        pose = _RecordingPose()
-        _detector(self.DETS, pose, pose_closeups_only=False).detect_and_track(
-            self.FRAME, 0, 0.0, np.eye(3)
-        )
-        # either ahead of time on the worker thread, or inside estimate()
-        ran_ahead = (
-            pose.full_frame_runs == 1 and "full_frame" in pose.estimate_kwargs[0]
-        )
-        left_to_estimate = pose.full_frame_runs == 0 and pose.estimate_kwargs == [{}]
-        assert ran_ahead or left_to_estimate
-
-    def test_closeups_only_skips_the_full_frame_pass(self):
-        pose = _RecordingPose()
-        _detector(self.DETS, pose, pose_closeups_only=True).detect_and_track(
-            self.FRAME, 0, 0.0, np.eye(3)
-        )
-        assert pose.full_frame_runs == 0
-        assert pose.estimate_kwargs == [{"full_frame": None}]

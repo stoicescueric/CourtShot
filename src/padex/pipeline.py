@@ -1,437 +1,287 @@
 """
-Project: Padex
-File Created: 2026-03-07
-Author: Xingnan Zhu
-File Name: pipeline.py
-Description:
-    Top-level pipeline orchestrator for Padex.
+The whole of Padex for one video:
 
-    Provides the Padex class and convenience functions for running
-    the full analysis pipeline: tracking -> bounce detection -> shot
-    classification, with optional annotated video export.
+    video ──track()──▶ raw tracking (cached next to the video)
+          ──analyse()─▶ stable player IDs, ball events, 3D ball flights
+          ──▶ tracked video, match report, 3D replay
 
-Usage:
-    import padex
+    from padex import Padex
 
-    result = padex.process("match.mp4", calibration="cal.json")
-    print(f"Found {len(result.shots)} shots")
+    p = Padex("match.mp4")              # needs match_calibration.json next to it
+    outputs = p.run("output/match")     # everything; or step by step:
 
-    padex.export_video(result, "match.mp4", "output.mp4")
+    analysis = p.analyse()
+    p.export_video(analysis, "output/match/match_tracked.mp4")
+
+Tracking is the slow, GPU-bound step. It is saved as
+<video>_tracking_cache.pkl and reused when it was made from this video,
+calibration, ball model and settings; delete the cache to force it.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import os
-import pickle
-from collections import defaultdict
-from dataclasses import dataclass, field
+from collections import Counter, defaultdict
 from pathlib import Path
 
-from padex.schemas.events import Bounce, Shot
+from padex.analysis import shots as shot_stats
+from padex.analysis.identities import SLOT_NAMES, SLOT_TEAMS, StableIdConfig
+from padex.analysis.match import MatchAnalysis, analyse_cache, fit_path
 from padex.schemas.tracking import CourtCalibration
+from padex.tracking import cache as tracking_cache
 from padex.tracking.pipeline import TrackingPipeline, TrackingResult
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_BALL_MODEL = Path("checkpoints/padel_tracknetv3.pt")
+# People kept per frame before the identity step picks the four players. More
+# than 4 on purpose: an umpire or a reflection can score higher than a far
+# player, and the identity step is the better judge of who is playing.
+DEFAULT_MAX_PLAYERS = 8
 
-@dataclass
-class PadexResult:
-    """Output of the full Padex pipeline."""
 
-    tracking: TrackingResult
-    bounces: list[Bounce] = field(default_factory=list)
-    shots: list[Shot] = field(default_factory=list)
-    calibration: CourtCalibration | None = None
+def load_calibration(video: Path, calibration: CourtCalibration | str | Path | None) -> CourtCalibration:
+    """The calibration given, or <video>_calibration.json next to the video."""
+    if isinstance(calibration, CourtCalibration):
+        return calibration
+    path = Path(calibration) if calibration is not None else video.with_name(video.stem + "_calibration.json")
+    if not path.exists():
+        if calibration is not None:
+            raise FileNotFoundError(f"Calibration file not found: {path}")
+        raise ValueError(
+            f"No court calibration found for '{video.name}'. Calibrate the court first:\n  padex calibrate \"{video}\""
+        )
+    with open(path) as f:
+        return CourtCalibration(**json.load(f))
 
 
 class Padex:
-    """Top-level pipeline: video -> tracking -> bounces -> shots.
+    """Tracking, analysis and outputs for one match video.
 
-    Args:
-        video_path: Path to the input video file.
-        calibration: Court calibration — a CourtCalibration object, a Path
-            to a calibration JSON, or None for auto-detection. If None,
-            looks for ``<video_stem>_calibration.json`` next to the video.
-        enable_pose: Whether to run pose estimation (needed for shot
-            classification). Defaults to True.
-        cache_tracking: Whether to cache tracking results as pickle for
-            faster re-runs. Defaults to True.
-        cache_dir: Directory for tracking cache files. Defaults to
-            ``output/`` under the project root.
+    video_path:       the match video (fixed camera)
+    calibration:      a CourtCalibration, the path of a calibration JSON, or
+                      None for <video>_calibration.json next to the video
+    ball_model_path:  TrackNetV3 weights (default: checkpoints/padel_tracknetv3.pt)
+    enable_pose:      run pose estimation (needed to tell overheads and to
+                      rule out hits by players who stood still)
+    cache_tracking:   save / reuse the tracking next to the video
+    cache_dir:        where the cache goes (default: next to the video)
+    max_players:      people kept per frame for the identity step to choose from
+    id_config:        settings of the identity step
     """
 
     def __init__(
         self,
         video_path: str | Path,
         calibration: CourtCalibration | str | Path | None = None,
+        ball_model_path: str | Path | None = None,
         enable_pose: bool = True,
         cache_tracking: bool = True,
         cache_dir: str | Path | None = None,
-        use_tracknet_v3: bool = False,
-        ball_model_path: str | Path | None = None,
-        event_model_path: str | Path | None = None,
-        max_players: int | None = None,
+        max_players: int = DEFAULT_MAX_PLAYERS,
+        id_config: StableIdConfig | None = None,
     ) -> None:
-        self.max_players = max_players
-        self.tracking_from_cache = False
         self.video_path = Path(video_path)
         if not self.video_path.exists():
             raise FileNotFoundError(f"Video not found: {self.video_path}")
-
+        self.ball_model_path = Path(ball_model_path or DEFAULT_BALL_MODEL)
+        if not self.ball_model_path.exists():
+            raise FileNotFoundError(f"Ball model not found: {self.ball_model_path}")
+        self.calibration = load_calibration(self.video_path, calibration)
         self.enable_pose = enable_pose
         self.cache_tracking = cache_tracking
-        self.cache_dir = Path(cache_dir) if cache_dir else self.video_path.parent
-        self.use_tracknet_v3 = use_tracknet_v3
-        self.ball_model_path = str(ball_model_path) if ball_model_path else None
-        self.event_model_path = Path(event_model_path) if event_model_path else None
+        self.cache_path = tracking_cache.cache_path_for(self.video_path, cache_dir)
+        self.max_players = max_players
+        self.id_config = id_config
+        self.tracking_from_cache = False
 
-        self._calibration = self._resolve_calibration(calibration)
+    # -- tracking ---------------------------------------------------------
 
-    def _resolve_calibration(
-        self, calibration: CourtCalibration | str | Path | None
-    ) -> CourtCalibration | None:
-        if isinstance(calibration, CourtCalibration):
-            return calibration
-
-        if isinstance(calibration, (str, Path)):
-            cal_path = Path(calibration)
-            if not cal_path.exists():
-                raise FileNotFoundError(f"Calibration file not found: {cal_path}")
-            with open(cal_path) as f:
-                return CourtCalibration(**json.load(f))
-
-        # Auto-discover sibling calibration file
-        cal_sibling = self.video_path.with_name(
-            self.video_path.stem + "_calibration.json"
-        )
-        if cal_sibling.exists():
-            logger.info("Auto-discovered calibration: %s", cal_sibling)
-            with open(cal_sibling) as f:
-                return CourtCalibration(**json.load(f))
-
-        raise ValueError(
-            f"No court calibration found for '{self.video_path.name}'. "
-            f"Run interactive calibration first:\n"
-            f"  cal = padex.interactive_calibrate(\"{self.video_path}\")\n"
-            f"  result = padex.process(\"{self.video_path}\", calibration=cal)\n"
-            f"Or from CLI:\n"
-            f"  padex calibrate \"{self.video_path}\""
+    def tracking_key(self) -> dict[str, object]:
+        """What the cached tracking of this video depends on."""
+        return tracking_cache.tracking_key(
+            self.video_path, self.calibration, self.ball_model_path, self.enable_pose, self.max_players
         )
 
-    def run(self) -> PadexResult:
-        """Run the full pipeline: tracking -> bounce detection -> shot classification."""
-        from padex.events.bounce import BounceDetector, MLPEventDetectionStrategy
-        from padex.events.shot import PoseBasedShotTypeClassifier, ShotDetector
-
-        # Stage 1: Tracking
-        tracking = self._run_tracking()
-
-        # Stage 2: Bounce detection
-        logger.info("=== Stage 2: Bounce detection ===")
-        if self.event_model_path and self.event_model_path.exists():
-            logger.info("Using MLP event detector: %s", self.event_model_path)
-            mlp = MLPEventDetectionStrategy(model_path=self.event_model_path)
-            bounce_indices, hit_indices = mlp.detect_events(
-                tracking.ball_frames, tracking.player_frames
-            )
-            logger.info(
-                "MLP detected %d bounce candidates, %d hit candidates",
-                len(bounce_indices), len(hit_indices),
-            )
-            # Build Bounce objects from indices using geometry classifier
-            bounce_detector = BounceDetector()
-            bounces = bounce_detector.detect_bounces(
-                tracking.ball_frames, tracking.calibration,
-                precomputed_indices=bounce_indices,
-            )
-        else:
-            bounce_detector = BounceDetector()
-            bounces = bounce_detector.detect_bounces(
-                tracking.ball_frames, tracking.calibration
-            )
-            hit_indices = []
-        logger.info("Detected %d bounces", len(bounces))
-
-        # Stage 3: Shot detection + classification
-        logger.info("=== Stage 3: Shot detection ===")
-        shot_detector = ShotDetector(
-            shot_type_classifier=PoseBasedShotTypeClassifier(),
-        )
-        shots = shot_detector.detect_shots(
-            player_frames=tracking.player_frames,
-            ball_frames=tracking.ball_frames,
-            bounces=bounces,
-        )
-        logger.info("Detected %d shots", len(shots))
-        for s in shots:
-            logger.info(
-                "  Shot %-20s | player=%-8s | type=%-18s | conf=%.2f | ts=%.0f ms",
-                s.shot_id, s.player_id, s.shot_type.value, s.confidence, s.timestamp_ms,
-            )
-
-        # Filter bounces that overlap with shot contacts (within 200ms)
-        # These are racket hits misdetected as bounces
-        contact_times = [s.timestamp_ms for s in shots]
-        contact_overlap_ms = 200.0
-        filtered_bounces = [
-            b for b in bounces
-            if b.timestamp_ms is None
-            or not any(
-                abs(b.timestamp_ms - ct) < contact_overlap_ms
-                for ct in contact_times
-            )
-        ]
-        if len(filtered_bounces) < len(bounces):
-            logger.info(
-                "Filtered %d false bounces near shot contacts (%d → %d)",
-                len(bounces) - len(filtered_bounces),
-                len(bounces),
-                len(filtered_bounces),
-            )
-
-        return PadexResult(
-            tracking=tracking,
-            bounces=filtered_bounces,
-            shots=shots,
-            calibration=tracking.calibration,
-        )
-
-    def _run_tracking(self) -> TrackingResult:
-        cache_path = self.cache_dir / f"{self.video_path.stem}_tracking_cache.pkl"
-
-        key = self._tracking_key()
-        key_path = cache_path.with_suffix(".key.json")
-        if self.cache_tracking and cache_path.exists():
-            reason = self._stale_reason(key_path, key)
-            if reason is not None:
-                old = cache_path.with_suffix(".old.pkl")
-                os.replace(cache_path, old)
-                logger.warning(
-                    "Not reusing %s: %s. Kept as %s; tracking again.",
-                    cache_path.name, reason, old.name,
-                )
-
-        if self.cache_tracking and cache_path.exists():
-            self.tracking_from_cache = True
-            logger.info("=== Stage 1: Loading cached tracking results ===")
-            with open(cache_path, "rb") as f:
-                tracking = pickle.load(f)
-            logger.info(
-                "Loaded from cache: %d player frames, %d ball frames",
-                len(tracking.player_frames),
-                len(tracking.ball_frames),
-            )
-            return tracking
-
-        logger.info("=== Stage 1: Running tracking pipeline ===")
-        pipeline = TrackingPipeline(
-            video_path=self.video_path,
-            enable_pose=self.enable_pose,
-            manual_calibration=self._calibration,
-            use_tracknet_v3=self.use_tracknet_v3,
-            ball_model_path=self.ball_model_path,
-            max_players=self.max_players,
-        )
-        tracking = pipeline.run()
-        logger.info(
-            "Tracking done: %d player frames, %d ball frames",
-            len(tracking.player_frames),
-            len(tracking.ball_frames),
-        )
-
+    def track(self) -> TrackingResult:
+        """Raw tracking of the video: from the cache when it can be reused,
+        otherwise by running the detectors (and saving the result)."""
+        key = self.tracking_key()
         if self.cache_tracking:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(cache_path, "wb") as f:
-                pickle.dump(tracking, f)
-            key_path.write_text(json.dumps(key, indent=1), encoding="utf-8")
-            logger.info("Tracking results cached: %s", cache_path)
+            tracking_cache.set_aside_if_stale(self.cache_path, key)
+            if self.cache_path.exists():
+                self.tracking_from_cache = True
+                tracking = tracking_cache.load_tracking(self.cache_path)
+                logger.info(
+                    "Tracking loaded from %s: %d player frames, %d ball frames",
+                    self.cache_path.name,
+                    len(tracking.player_frames),
+                    len(tracking.ball_frames),
+                )
+                return tracking
 
+        logger.info("Tracking %s ...", self.video_path.name)
+        tracking = TrackingPipeline(
+            video_path=self.video_path,
+            ball_model_path=self.ball_model_path,
+            calibration=self.calibration,
+            enable_pose=self.enable_pose,
+            max_players=self.max_players,
+        ).run()
+        logger.info(
+            "Tracking done: %d player frames, %d ball frames", len(tracking.player_frames), len(tracking.ball_frames)
+        )
+        if self.cache_tracking:
+            tracking_cache.save_tracking(tracking, self.cache_path, key)
+            logger.info("Tracking saved: %s", self.cache_path)
         return tracking
 
-    def _tracking_key(self) -> dict[str, object]:
-        """Everything the cached tracking depends on. Saved next to the cache
-        so tracking made from another video, calibration, model or setting is
-        not mistaken for this run's."""
-        from padex.tracking.device import use_pose_closeups_only
+    # -- analysis ---------------------------------------------------------
 
-        def file_id(path: str | Path | None) -> str | None:
-            if path is None:
-                return None
-            p = Path(path)
-            return f"{p.name}:{p.stat().st_size}" if p.exists() else p.name
+    def analyse(self, fit_3d: bool = True, refit: bool = False) -> MatchAnalysis:
+        """Track (or load the tracking), then stable IDs, ball events and,
+        unless fit_3d is False, the 3D ball flights.
 
-        cal = self._calibration.model_dump_json() if self._calibration else ""
-        return {
-            "video": file_id(self.video_path),
-            "calibration_sha1": hashlib.sha1(cal.encode()).hexdigest(),
-            "ball_model": file_id(self.ball_model_path),
-            "use_tracknet_v3": self.use_tracknet_v3,
-            "enable_pose": self.enable_pose,
-            "tracker": os.environ.get("PADEX_TRACKER", "padex_bytetrack.yaml"),
-            "max_players": self.max_players,
-            "pose_closeups_only": bool(self.enable_pose and use_pose_closeups_only()),
-        }
+        The appearance vectors and the 3D fit are saved next to the tracking
+        cache, so they need cache_tracking to be on; without it the
+        identities go by motion alone and there is no 3D fit.
+        """
+        raw = self.track()
+        if not self.cache_path.exists():
+            logger.warning("Tracking is not cached: no appearance check and no 3D ball fit")
+            from padex.analysis import ball_events
+            from padex.analysis.identities import frame_rate, stabilize_tracking
 
-    @staticmethod
-    def _stale_reason(key_path: Path, key: dict[str, object]) -> str | None:
-        """Why the cache can't be reused, or None if it can."""
-        if not key_path.exists():
-            # Cache from before keys were saved: nothing to compare with.
-            logger.warning(
-                "%s is missing, so the cached tracking can't be checked against "
-                "the current video, calibration and models. Delete the cache to "
-                "re-track.", key_path.name,
+            stable, id_report = stabilize_tracking(raw, self.id_config)
+            fps = frame_rate(raw)
+            return MatchAnalysis(
+                self.cache_path, raw, stable, id_report, fps, ball_events.run_on_tracking(stable, fps), None
             )
-            return None
-        try:
-            saved = json.loads(key_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return "its key file is unreadable"
-        changed = [k for k in key if saved.get(k) != key[k]]
-        return f"changed since it was made: {', '.join(changed)}" if changed else None
+        return analyse_cache(
+            self.cache_path, video=self.video_path, raw=raw, id_config=self.id_config, fit_3d=fit_3d, refit=refit
+        )
+
+    # -- outputs ----------------------------------------------------------
 
     def export_video(
         self,
-        result: PadexResult,
+        analysis: MatchAnalysis,
         output_path: str | Path,
-        shot_display_ms: float = 1500.0,
-        ball_speeds: dict[int, float] | None = None,
+        shot_display_s: float = 1.5,
+        bounce_display_s: float = 1.0,
     ) -> Path:
-        """Export annotated video with shot labels overlaid.
-
-        Args:
-            result: PadexResult from run().
-            output_path: Path for the output video file.
-            shot_display_ms: How long to display each shot label (ms).
-            ball_speeds: Ball speed in km/h per frame_id; where given, it is
-                written next to the ball and in the stats panel.
-
-        Returns:
-            Path to the exported video file.
-        """
+        """The video with players, ball, ball speed, bounces and shot types drawn on it."""
         from padex.io.video import VideoReader, VideoWriter
         from padex.viz.frame import FrameAnnotator
 
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        tracking, ball, ball3d = analysis.tracking, analysis.ball, analysis.ball3d
 
-        shot_events = sorted(result.shots, key=lambda s: s.timestamp_ms)
+        players_at: dict[int, list] = defaultdict(list)
+        for pf in tracking.player_frames:
+            players_at[pf.frame_id].append(pf)
+        ball_at = {bf.frame_id: bf for bf in tracking.ball_frames}
+        speeds = analysis.ball_speeds
+        ball_court = ball3d.positions if ball3d is not None else {}
 
-        def get_active_shot(timestamp_ms: float):
-            active = None
-            for s in shot_events:
-                if s.timestamp_ms <= timestamp_ms <= s.timestamp_ms + shot_display_ms:
-                    active = s
-            return active
-
-        player_lookup: dict[int, list] = defaultdict(list)
-        for pf in result.tracking.player_frames:
-            player_lookup[pf.frame_id].append(pf)
-
-        ball_lookup: dict[int, object] = {}
-        for bf in result.tracking.ball_frames:
-            ball_lookup[bf.frame_id] = bf
-
-        shot_counts: dict[str, int] = defaultdict(int)
-        for s in result.shots:
-            shot_counts[s.shot_type.value] += 1
+        shots = []
+        if ball is not None:
+            shots = shot_stats.build_shots(ball, tracking, dict(zip(SLOT_NAMES, SLOT_TEAMS)), ball3d, analysis.fps)
+        shot_counts = Counter(s.type for s in shots)
+        top_types = [(k.replace("_", "/"), n) for k, n in shot_counts.most_common(4)]
 
         annotator = FrameAnnotator()
-
-        logger.info("Exporting annotated video to %s", output_path)
+        logger.info("Writing the tracked video to %s", output_path)
         with VideoReader(self.video_path) as reader:
             fps = reader.fps
-            w, h = reader.frame_size
-            bounce_display_frames = int(fps)  # ~1 second
+            # what to show in each frame, worked out once
+            label_at: dict[int, str] = {}
+            for s in sorted(shots, key=lambda s: s.time_s):
+                first = round(s.time_s * fps)
+                label = s.type.replace("_", " / ").upper()
+                for f in range(first, first + int(shot_display_s * fps) + 1):
+                    label_at[f] = label  # a later shot takes over from an earlier one
+            bounces_at: dict[int, list] = defaultdict(list)
+            n_bounce = max(1, int(bounce_display_s * fps))
+            for e in ball.events if ball is not None else []:
+                if e.kind == "hit":
+                    continue
+                first = round(e.time_s * fps)
+                for k in range(n_bounce):
+                    bounces_at[first + k].append((e.px, e.kind, k / n_bounce))
 
-            # Pre-compute bounce → frame_id mapping
-            bounce_events: list[tuple[int, object]] = []
-            for b in result.bounces:
-                if b.timestamp_ms is not None:
-                    b_frame = round(b.timestamp_ms / (1000.0 / fps))
-                    bounce_events.append((b_frame, b))
-
-            with VideoWriter(output_path, fps=fps, frame_size=(w, h)) as writer:
-                for frame_id, timestamp_ms, frame in reader.frames():
-                    player_frames_here = player_lookup.get(frame_id, [])
-                    ball_frame_here = ball_lookup.get(frame_id)
-                    active_shot = get_active_shot(timestamp_ms)
-
-                    # Collect active bounces with fade progress
-                    active_bounces = []
-                    for b_frame, bounce in bounce_events:
-                        elapsed = frame_id - b_frame
-                        if 0 <= elapsed < bounce_display_frames:
-                            progress = elapsed / bounce_display_frames
-                            active_bounces.append((bounce, progress))
-
-                    stats = {"Frame": frame_id, "Shots": len(result.shots)}
-                    speed = ball_speeds.get(frame_id) if ball_speeds else None
-                    if ball_speeds is not None:
+            with VideoWriter(output_path, fps=fps, frame_size=reader.frame_size) as writer:
+                for frame_id, _, frame in reader.frames():
+                    stats: dict[str, str | int] = {"Frame": frame_id, "Shots": len(shots)}
+                    speed = speeds.get(frame_id) if speeds else None
+                    if speeds is not None:
                         stats["Ball"] = f"{speed:.0f} km/h" if speed is not None else "-"
-                    for shot_type, count in sorted(
-                        shot_counts.items(), key=lambda x: -x[1]
-                    )[:4]:
-                        stats[shot_type[:12]] = count
-
+                    stats.update(top_types)
+                    xyz = ball_court.get(frame_id)
                     annotator.annotate_frame(
                         frame=frame,
                         frame_id=frame_id,
-                        player_frames=player_frames_here,
-                        ball_frame=ball_frame_here,
-                        calibration=result.calibration,
-                        shot=active_shot,
+                        player_frames=players_at.get(frame_id, []),
+                        ball_frame=ball_at.get(frame_id),
+                        calibration=tracking.calibration,
+                        shot_label=label_at.get(frame_id),
                         stats=stats,
-                        active_bounces=active_bounces,
+                        bounces=bounces_at.get(frame_id),
                         ball_speed_kmh=speed,
+                        ball_court=None if xyz is None else (float(xyz[0]), float(xyz[1])),
                     )
                     writer.write(frame)
-
-                    if frame_id % 100 == 0:
-                        logger.info("  Written frame %d", frame_id)
-
-        logger.info("Annotated video saved: %s", output_path)
+                    if frame_id % 500 == 0:
+                        logger.info("  frame %d / %d", frame_id, reader.frame_count)
+        logger.info("Tracked video saved: %s", output_path)
         return output_path
 
+    def run(
+        self,
+        out_dir: str | Path | None = None,
+        video: bool = True,
+        report: bool = True,
+        replay: bool = True,
+        fit_3d: bool = True,
+        redo_video: bool = False,
+    ) -> dict[str, Path]:
+        """Everything for this video; returns the paths of what was written.
 
-def process(
-    video_path: str | Path,
-    calibration: CourtCalibration | str | Path | None = None,
-    event_model_path: str | Path | None = None,
-    **kwargs,
-) -> PadexResult:
-    """Convenience function: run the full Padex pipeline.
+        out_dir: default output/<video name>/
+        video / report / replay: which outputs to make
+        fit_3d: False skips the 3D ball fit (faster; no ball speed on the
+                video, rougher shot data, no 3D replay)
+        redo_video: write the tracked video again even when the one in
+                out_dir is newer than the tracking and the 3D fit it shows
+        """
+        from padex.report.match_report import print_summary, write_match_report
+        from padex.report.scene3d import write_scene
 
-    Args:
-        video_path: Path to the input video file.
-        calibration: Court calibration (CourtCalibration, JSON path, or None).
-        **kwargs: Additional arguments passed to Padex().
+        name = self.video_path.stem
+        out = Path(out_dir) if out_dir is not None else Path("output") / name
+        out.mkdir(parents=True, exist_ok=True)
+        analysis = self.analyse(fit_3d=fit_3d)
+        written: dict[str, Path] = {}
 
-    Returns:
-        PadexResult with tracking, bounces, and shots.
-    """
-    return Padex(video_path, calibration=calibration, event_model_path=event_model_path, **kwargs).run()
-
-
-def export_video(
-    result: PadexResult,
-    video_path: str | Path,
-    output_path: str | Path,
-    **kwargs,
-) -> Path:
-    """Convenience function: export annotated video.
-
-    Args:
-        result: PadexResult from process().
-        video_path: Path to the original video (for frame data).
-        output_path: Path for the output video file.
-        **kwargs: Additional arguments passed to Padex.export_video().
-
-    Returns:
-        Path to the exported video file.
-    """
-    p = Padex(video_path, calibration=result.calibration, cache_tracking=True)
-    return p.export_video(result, output_path, **kwargs)
+        if video:
+            out_video = out / f"{name}_tracked.mp4"
+            fit = fit_path(self.cache_path)
+            up_to_date = (
+                not redo_video
+                and self.tracking_from_cache
+                and out_video.exists()
+                and (not fit.exists() or out_video.stat().st_mtime >= fit.stat().st_mtime)
+            )
+            if up_to_date:
+                logger.info("Tracking and 3D fit reused; keeping %s", out_video)
+            else:
+                self.export_video(analysis, out_video)
+            written["video"] = out_video
+        if report:
+            print_summary(write_match_report(analysis, out))
+            written["report"] = out / "report.html"
+        if replay and analysis.ball3d is not None:
+            written["replay"] = write_scene(analysis, out / "scene3d.html", video=self.video_path)
+        return written

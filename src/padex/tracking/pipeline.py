@@ -1,11 +1,9 @@
 """
-Project: Padex
-File Created: 2026-03-03
-Author: Xingnan Zhu
-File Name: pipeline.py
-Description:
-    Orchestrates the full tracking pipeline across all detectors.
-    End-to-end: video → structured tracking data.
+Video -> raw tracking: players (boxes, tracker IDs, pose) and the ball, frame
+by frame. This is the slow, GPU-bound part of Padex; its result is cached
+(padex.tracking.cache) and everything else works from that.
+
+Original author: Xingnan Zhu.
 """
 
 from __future__ import annotations
@@ -18,21 +16,16 @@ from pathlib import Path
 import numpy as np
 
 from padex.schemas.tracking import BallFrame, CourtCalibration, PlayerFrame
-from padex.tracking.ball import BallDetector, SahiYoloBallDetectionStrategy, TrackNetV3BallDetectionStrategy
-from padex.tracking.court import CourtDetector
+from padex.tracking.ball import BallDetector
 from padex.tracking.device import detect_device, use_threads
-from padex.tracking.player import (
-    PlayerDetector,
-    YoloPlayerDetectionStrategy,
-    YoloPoseEstimationStrategy,
-)
+from padex.tracking.player import PlayerDetector, YoloPersonTracker, YoloPoseEstimator
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class TrackingResult:
-    """Output of the tracking pipeline."""
+    """What tracking a video gives."""
 
     player_frames: list[PlayerFrame] = field(default_factory=list)
     ball_frames: list[BallFrame] = field(default_factory=list)
@@ -40,48 +33,34 @@ class TrackingResult:
 
 
 class TrackingPipeline:
-    """End-to-end tracking pipeline: video → structured tracking data.
+    """Runs the player and ball detectors over a video.
 
-    Stages:
-    1. Court calibration — sample frames to find best homography
-    2. Per-frame player detection + tracking
-    3. Ball detection + Kalman tracking (batch)
+    Without a calibration the players have no court position (and nobody is
+    filtered out for standing outside the court).
     """
 
     def __init__(
         self,
         video_path: str | Path,
-        court_detector: CourtDetector | None = None,
+        ball_model_path: str | Path,
+        calibration: CourtCalibration | None = None,
+        enable_pose: bool = True,
+        max_players: int = 4,
+        device: str | None = None,
         player_detector: PlayerDetector | None = None,
         ball_detector: BallDetector | None = None,
-        calibration_sample_step: int = 300,
-        device: str | None = None,
-        manual_calibration: CourtCalibration | None = None,
-        enable_pose: bool = False,
-        use_tracknet_v3: bool = False,
-        ball_model_path: str | None = None,
-        max_players: int | None = None,
     ) -> None:
         self.video_path = Path(video_path)
+        self.calibration = calibration
         self.device = device or detect_device()
         logger.info("Inference device: %s", self.device)
 
-        pose_strategy = (
-            YoloPoseEstimationStrategy(device=self.device) if enable_pose else None
-        )
-        self.court_detector = court_detector or CourtDetector()
         self.player_detector = player_detector or PlayerDetector(
-            detection_strategy=YoloPlayerDetectionStrategy(device=self.device),
-            pose_strategy=pose_strategy,
+            tracker=YoloPersonTracker(device=self.device),
+            pose=YoloPoseEstimator(device=self.device) if enable_pose else None,
             max_players=max_players,
         )
-        self.ball_detector = ball_detector or BallDetector(
-            use_tracknet=not use_tracknet_v3,
-            use_tracknet_v3=use_tracknet_v3,
-            model_path=ball_model_path,
-        )
-        self.calibration_sample_step = calibration_sample_step
-        self.manual_calibration = manual_calibration
+        self.ball_detector = ball_detector or BallDetector(str(ball_model_path), device=self.device)
 
     def run(
         self,
@@ -89,99 +68,54 @@ class TrackingPipeline:
         end_frame: int | None = None,
         step: int = 1,
     ) -> TrackingResult:
-        """Run the full tracking pipeline.
-
-        Args:
-            start_frame: First frame to process.
-            end_frame: Last frame (exclusive). None for entire video.
-            step: Process every Nth frame.
-
-        Returns:
-            TrackingResult with player_frames, ball_frames, calibration.
-        """
+        """Track frames start_frame..end_frame (exclusive; None = to the end),
+        every step-th one."""
         from padex.io.video import VideoReader
 
         player_frames: list[PlayerFrame] = []
         ball_frames: list[BallFrame] = []
+        H = np.array(self.calibration.homography_matrix) if self.calibration is not None else None
+        if H is None:
+            logger.warning("No court calibration: player positions will be None")
 
         with VideoReader(self.video_path) as reader:
             total_frames = reader.frame_count
 
-            # Stage 1: Court calibration
-            calibration: CourtCalibration | None = None
-            H: np.ndarray | None = None
-
-            if self.manual_calibration is not None:
-                calibration = self.manual_calibration
-                H = np.array(calibration.homography_matrix)
-                logger.info("Using manual court calibration")
-            else:
-                calibration = self._calibrate_court(reader)
-                if calibration is not None:
-                    H = np.array(calibration.homography_matrix)
-                    logger.info(
-                        "Court calibrated (error=%.3f)",
-                        calibration.reprojection_error or -1,
-                    )
-                else:
-                    logger.warning("Court calibration failed — positions will be None")
-
             # A fixed camera has a stable background: give the ball model the
             # median of frames spread over the video instead of letting it use
             # the first frame (which has players and maybe the ball in it).
-            set_bg = getattr(self.ball_detector.detection_strategy, "set_background", None)
-            if set_bg is not None:
-                background = self._median_background(reader, start_frame, end_frame)
-                if background is not None:
-                    set_bg(background)
+            background = self._median_background(reader, start_frame, end_frame)
+            if background is not None:
+                self.ball_detector.set_background(background)
 
-            # Set homography for ball tracker before the loop
-            if H is not None:
-                self.ball_detector.tracker.set_homography(H)
-
-            # Stage 2: Per-frame detection (streaming — no frame buffering)
             # The ball and the players are independent, so the ball model runs
             # on a worker thread while the main thread handles the players.
             # Each frame's ball result is collected before the next frame
             # starts, so the output is the same as running them in turn.
             processed = 0
-            ball_pool = (
-                ThreadPoolExecutor(max_workers=1, thread_name_prefix="padex-ball")
-                if use_threads()
-                else None
-            )
+            ball_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="padex-ball") if use_threads() else None
             try:
                 for frame_id, timestamp_ms, frame in reader.frames(
                     start_frame=start_frame, end_frame=end_frame, step=step
                 ):
-                    # Ball detection + tracking (streaming; results arrive a few
-                    # frames late when the detector smooths over time)
                     ball_future = None
                     if ball_pool is not None:
-                        ball_future = ball_pool.submit(
-                            self.ball_detector.detect_and_track_smoothed,
-                            frame, frame_id, timestamp_ms,
-                        )
+                        ball_future = ball_pool.submit(self.ball_detector.update, frame, frame_id, timestamp_ms)
 
-                    # Player detection + tracking
                     try:
-                        pf_list = self.player_detector.detect_and_track(
+                        players = self.player_detector.detect_and_track(
                             frame, frame_id, timestamp_ms, homography_matrix=H
                         )
                     except BaseException:
                         if ball_future is not None:
                             ball_future.exception()  # wait: never leave the worker running
                         raise
-                    player_frames.extend(pf_list)
+                    player_frames.extend(players)
 
                     if ball_future is not None:
                         ball_frames.extend(ball_future.result())
                     else:
-                        ball_frames.extend(
-                            self.ball_detector.detect_and_track_smoothed(
-                                frame, frame_id, timestamp_ms
-                            )
-                        )
+                        ball_frames.extend(self.ball_detector.update(frame, frame_id, timestamp_ms))
 
                     processed += 1
                     if processed % 500 == 0:
@@ -198,11 +132,10 @@ class TrackingPipeline:
             ball_frames.extend(self.ball_detector.flush())
 
         logger.info("Tracking complete: %d frames processed", processed)
-
         return TrackingResult(
             player_frames=player_frames,
             ball_frames=ball_frames,
-            calibration=calibration,
+            calibration=self.calibration,
         )
 
     @staticmethod
@@ -218,19 +151,3 @@ class TrackingPipeline:
         if len(frames) < samples // 2:
             return None
         return np.median(np.stack(frames), axis=0).astype(np.uint8)
-
-    def _calibrate_court(self, reader) -> CourtCalibration | None:
-        """Find the best court calibration from sampled frames."""
-        best_cal: CourtCalibration | None = None
-        best_error = float("inf")
-
-        for frame_id, _, frame in reader.frames(
-            step=self.calibration_sample_step
-        ):
-            cal = self.court_detector.calibrate_frame(frame)
-            if cal is not None and cal.reprojection_error is not None:
-                if cal.reprojection_error < best_error:
-                    best_error = cal.reprojection_error
-                    best_cal = cal
-
-        return best_cal

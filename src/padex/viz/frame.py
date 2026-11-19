@@ -1,12 +1,8 @@
 """
-Project: Padex
-File Created: 2026-03-04
-Author: Xingnan Zhu
-File Name: frame.py
-Description:
-    Frame annotation module for video output.
-    Draws player bboxes, ball markers, court lines, mini court,
-    stats panel, and shot labels on video frames using OpenCV.
+Drawing on video frames: player boxes and skeletons, the ball and its speed,
+court lines, bounce marks, the shot label, a mini court and a stats panel.
+
+Original author: Xingnan Zhu.
 """
 
 from __future__ import annotations
@@ -14,157 +10,99 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from padex.schemas.events import Bounce, BounceType, Shot
-from padex.schemas.tracking import (
-    BallFrame,
-    BallVisibility,
-    CourtCalibration,
-    PlayerFrame,
-)
-from padex.tracking.court import COURT_MODEL
-from padex.viz.mini_court import MiniCourt
+from padex.court import COURT_MODEL
+from padex.schemas.tracking import BallFrame, CourtCalibration, PlayerFrame
+from padex.tracking.player import COCO_KEYPOINT_NAMES
+from padex.viz.mini_court import TEAM_COLORS, MiniCourt
 
-# Team colors (BGR)
-_TEAM_COLORS = {
-    "T_1": (229, 136, 30),   # blue
-    "T_2": (53, 57, 229),    # red
-}
 _DEFAULT_TEAM_COLOR = (200, 200, 200)
+_BALL_COLOR = (59, 235, 255)  # yellow (BGR)
 
-# Ball colors by visibility (BGR)
-_BALL_COLORS = {
-    BallVisibility.VISIBLE: (59, 235, 255),    # yellow
-    BallVisibility.OCCLUDED: (128, 128, 128),   # gray
-    BallVisibility.INFERRED: (255, 165, 0),     # orange
-}
-
-# Bounce impact colors by type (BGR)
-_BOUNCE_COLORS: dict[BounceType, tuple[int, int, int]] = {
-    BounceType.GROUND: (0, 255, 0),        # green
-    BounceType.BACK_WALL: (0, 0, 255),     # red
-    BounceType.SIDE_WALL: (0, 0, 255),     # red
-    BounceType.NET: (0, 255, 255),         # yellow
-    BounceType.BACK_FENCE: (0, 165, 255),  # orange
-    BounceType.SIDE_FENCE: (0, 165, 255),  # orange
-    BounceType.CORNER: (0, 165, 255),      # orange
+# Bounce mark colours by kind (BGR)
+_BOUNCE_COLORS = {
+    "ground": (0, 255, 0),  # green
+    "wall": (0, 0, 255),  # red
 }
 
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 _FONT_SMALL = cv2.FONT_HERSHEY_PLAIN
 
-# COCO skeleton connections (pairs of keypoint indices)
-_COCO_SKELETON = [
-    (0, 1), (0, 2), (1, 3), (2, 4),          # head
-    (5, 6),                                     # shoulders
-    (5, 7), (7, 9), (6, 8), (8, 10),           # arms
-    (5, 11), (6, 12), (11, 12),                 # torso
-    (11, 13), (13, 15), (12, 14), (14, 16),     # legs
-]
-
-# COCO keypoint names (index order)
-_COCO_KEYPOINT_NAMES = [
-    "nose", "left_eye", "right_eye", "left_ear", "right_ear",
-    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
-    "left_wrist", "right_wrist", "left_hip", "right_hip",
-    "left_knee", "right_knee", "left_ankle", "right_ankle",
-]
-
-# Colors per skeleton region (BGR)
-_SKELETON_COLORS = {
-    (0, 1): (255, 200, 50),   (0, 2): (255, 200, 50),   # head - cyan
-    (1, 3): (255, 200, 50),   (2, 4): (255, 200, 50),
-    (5, 6): (0, 255, 0),                                   # shoulders - green
-    (5, 7): (0, 200, 255),    (7, 9): (0, 200, 255),       # left arm - orange
-    (6, 8): (255, 0, 200),    (8, 10): (255, 0, 200),      # right arm - magenta
-    (5, 11): (0, 255, 0),     (6, 12): (0, 255, 0),        # torso - green
+# COCO skeleton: pairs of keypoint indices and their colours (BGR)
+_SKELETON = {
+    (0, 1): (255, 200, 50),
+    (0, 2): (255, 200, 50),  # head
+    (1, 3): (255, 200, 50),
+    (2, 4): (255, 200, 50),
+    (5, 6): (0, 255, 0),  # shoulders
+    (5, 7): (0, 200, 255),
+    (7, 9): (0, 200, 255),  # left arm
+    (6, 8): (255, 0, 200),
+    (8, 10): (255, 0, 200),  # right arm
+    (5, 11): (0, 255, 0),
+    (6, 12): (0, 255, 0),  # torso
     (11, 12): (0, 255, 0),
-    (11, 13): (0, 255, 255),  (13, 15): (0, 255, 255),     # left leg - yellow
-    (12, 14): (255, 255, 0),  (14, 16): (255, 255, 0),     # right leg - cyan
+    (11, 13): (0, 255, 255),
+    (13, 15): (0, 255, 255),  # left leg
+    (12, 14): (255, 255, 0),
+    (14, 16): (255, 255, 0),  # right leg
 }
+_KEYPOINT_INDEX = {name: i for i, name in enumerate(COCO_KEYPOINT_NAMES)}
+_MIN_KEYPOINT_CONFIDENCE = 0.3
+
+
+def _ball_centre(ball_frame: BallFrame | None) -> tuple[int, int] | None:
+    if ball_frame is None or ball_frame.bbox is None:
+        return None
+    b = ball_frame.bbox
+    return int((b.x1 + b.x2) / 2), int((b.y1 + b.y2) / 2)
 
 
 class FrameAnnotator:
-    """All OpenCV frame annotation logic in one place."""
+    """All the frame drawing in one place. Every method draws in place."""
 
     def __init__(self) -> None:
         self._mini_court = MiniCourt()
+        self._court_lines: tuple[CourtCalibration, list] | None = None  # (calibration, line ends in pixels)
 
-    def draw_player_bboxes(
-        self,
-        frame: np.ndarray,
-        player_frames: list[PlayerFrame],
-    ) -> None:
-        """Draw bounding boxes and player IDs."""
+    def draw_player_bboxes(self, frame: np.ndarray, player_frames: list[PlayerFrame]) -> None:
+        """Boxes and player IDs, coloured by team."""
         for pf in player_frames:
-            color = _TEAM_COLORS.get(pf.team_id, _DEFAULT_TEAM_COLOR)
+            color = TEAM_COLORS.get(pf.team_id, _DEFAULT_TEAM_COLOR)
             x1, y1 = int(pf.bbox.x1), int(pf.bbox.y1)
             x2, y2 = int(pf.bbox.x2), int(pf.bbox.y2)
-
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-            label = pf.player_id
-            (tw, th), _ = cv2.getTextSize(label, _FONT, 0.5, 1)
+            (tw, th), _ = cv2.getTextSize(pf.player_id, _FONT, 0.5, 1)
             cv2.rectangle(frame, (x1, y1 - th - 6), (x1 + tw + 4, y1), color, -1)
-            cv2.putText(frame, label, (x1 + 2, y1 - 4), _FONT, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, pf.player_id, (x1 + 2, y1 - 4), _FONT, 0.5, (255, 255, 255), 1)
 
-    def draw_pose_keypoints(
-        self,
-        frame: np.ndarray,
-        player_frames: list[PlayerFrame],
-    ) -> None:
-        """Draw pose keypoints and skeleton connections for each player."""
+    def draw_pose_keypoints(self, frame: np.ndarray, player_frames: list[PlayerFrame]) -> None:
+        """Skeleton and keypoints of each player."""
         for pf in player_frames:
-            if not pf.keypoints:
-                continue
-
-            # Build name→(x, y, conf) lookup
-            kp_map: dict[str, tuple[int, int, float]] = {}
+            pts: dict[int, tuple[int, int]] = {}
             for kp in pf.keypoints:
-                kp_map[kp.name] = (int(kp.x), int(kp.y), kp.confidence)
+                idx = _KEYPOINT_INDEX.get(kp.name)
+                if idx is not None and kp.confidence > _MIN_KEYPOINT_CONFIDENCE:
+                    pts[idx] = (int(kp.x), int(kp.y))
+            for (i, j), color in _SKELETON.items():
+                if i in pts and j in pts:
+                    cv2.line(frame, pts[i], pts[j], color, 2, cv2.LINE_AA)
+            for pt in pts.values():
+                cv2.circle(frame, pt, 4, (255, 255, 255), -1)
+                cv2.circle(frame, pt, 4, (0, 0, 0), 1)
 
-            # Index-based lookup
-            kp_by_idx: dict[int, tuple[int, int]] = {}
-            for idx, name in enumerate(_COCO_KEYPOINT_NAMES):
-                if name in kp_map:
-                    x, y, conf = kp_map[name]
-                    if conf > 0.3:
-                        kp_by_idx[idx] = (x, y)
-
-            # Draw skeleton lines
-            for i, j in _COCO_SKELETON:
-                if i in kp_by_idx and j in kp_by_idx:
-                    color = _SKELETON_COLORS.get((i, j), (200, 200, 200))
-                    cv2.line(frame, kp_by_idx[i], kp_by_idx[j], color, 2, cv2.LINE_AA)
-
-            # Draw keypoint circles
-            for idx, (x, y) in kp_by_idx.items():
-                cv2.circle(frame, (x, y), 4, (255, 255, 255), -1)
-                cv2.circle(frame, (x, y), 4, (0, 0, 0), 1)
-
-    def draw_ball(
-        self,
-        frame: np.ndarray,
-        ball_frame: BallFrame | None,
-    ) -> None:
-        """Draw ball marker at bbox center."""
-        if ball_frame is None or ball_frame.bbox is None:
+    def draw_ball(self, frame: np.ndarray, ball_frame: BallFrame | None) -> None:
+        """A dot on the detected ball."""
+        centre = _ball_centre(ball_frame)
+        if centre is None:
             return
+        cv2.circle(frame, centre, 8, _BALL_COLOR, -1)
+        cv2.circle(frame, centre, 8, (255, 255, 255), 1)
 
-        cx = int((ball_frame.bbox.x1 + ball_frame.bbox.x2) / 2)
-        cy = int((ball_frame.bbox.y1 + ball_frame.bbox.y2) / 2)
-        color = _BALL_COLORS.get(ball_frame.visibility, (59, 235, 255))
-
-        cv2.circle(frame, (cx, cy), 8, color, -1)
-        cv2.circle(frame, (cx, cy), 8, (255, 255, 255), 1)
-
-    def draw_ball_speed(
-        self,
-        frame: np.ndarray,
-        ball_frame: BallFrame | None,
-        speed_kmh: float | None,
-    ) -> None:
-        """Write the ball's speed next to the ball marker."""
-        if speed_kmh is None or ball_frame is None or ball_frame.bbox is None:
+    def draw_ball_speed(self, frame: np.ndarray, ball_frame: BallFrame | None, speed_kmh: float | None) -> None:
+        """The ball's speed next to the ball."""
+        centre = _ball_centre(ball_frame)
+        if speed_kmh is None or centre is None:
             return
 
         h, w = frame.shape[:2]
@@ -174,8 +112,7 @@ class FrameAnnotator:
         (tw, th), _ = cv2.getTextSize(label, _FONT, scale, thick)
         pad = max(3, round(th * 0.35))
 
-        cx = int((ball_frame.bbox.x1 + ball_frame.bbox.x2) / 2)
-        cy = int((ball_frame.bbox.y1 + ball_frame.bbox.y2) / 2)
+        cx, cy = centre
         # to the right of the ball, a little below it (the shot label sits
         # above); on the left when there is no room on the right
         x = cx + 14
@@ -186,48 +123,30 @@ class FrameAnnotator:
         overlay = frame.copy()
         cv2.rectangle(overlay, (x - pad, y - th - pad), (x + tw + pad, y + pad), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
-        cv2.putText(frame, label, (x, y), _FONT, scale, (59, 235, 255), thick, cv2.LINE_AA)
+        cv2.putText(frame, label, (x, y), _FONT, scale, _BALL_COLOR, thick, cv2.LINE_AA)
 
-    def draw_court_lines(
-        self,
-        frame: np.ndarray,
-        calibration: CourtCalibration | None,
-    ) -> None:
-        """Draw court lines projected onto the video frame."""
+    def draw_court_lines(self, frame: np.ndarray, calibration: CourtCalibration | None) -> None:
+        """The court lines, projected into the image."""
         if calibration is None:
             return
+        # the camera is fixed, so the lines are worked out once per calibration
+        if self._court_lines is None or self._court_lines[0] is not calibration:
+            try:
+                H_inv = np.linalg.inv(np.array(calibration.homography_matrix))
+            except np.linalg.LinAlgError:
+                return
+            kp = COURT_MODEL.KEYPOINTS
+            ends = np.array([[kp[a], kp[b]] for a, b in COURT_MODEL.LINES], dtype=np.float64)
+            px = cv2.perspectiveTransform(ends.reshape(-1, 1, 2), H_inv).reshape(-1, 2, 2)
+            lines = [((int(p[0][0]), int(p[0][1])), (int(p[1][0]), int(p[1][1]))) for p in px]
+            self._court_lines = (calibration, lines)
+        for p1, p2 in self._court_lines[1]:
+            cv2.line(frame, p1, p2, (0, 255, 0), 2)
 
-        H = np.array(calibration.homography_matrix)
-        try:
-            H_inv = np.linalg.inv(H)
-        except np.linalg.LinAlgError:
-            return
-
-        kp = COURT_MODEL.KEYPOINTS
-        for name1, name2 in COURT_MODEL.LINES:
-            if name1 not in kp or name2 not in kp:
-                continue
-            p1_m = np.array([[kp[name1]]], dtype=np.float64)
-            p2_m = np.array([[kp[name2]]], dtype=np.float64)
-            p1_px = cv2.perspectiveTransform(p1_m, H_inv)[0][0]
-            p2_px = cv2.perspectiveTransform(p2_m, H_inv)[0][0]
-            cv2.line(
-                frame,
-                (int(p1_px[0]), int(p1_px[1])),
-                (int(p2_px[0]), int(p2_px[1])),
-                (0, 255, 0),
-                2,
-            )
-
-    def draw_court_keypoints(
-        self,
-        frame: np.ndarray,
-        calibration: CourtCalibration | None,
-    ) -> None:
-        """Draw detected court keypoints on the frame."""
+    def draw_court_keypoints(self, frame: np.ndarray, calibration: CourtCalibration | None) -> None:
+        """The calibration's keypoints."""
         if calibration is None:
             return
-
         for px, py in calibration.court_keypoints_px:
             cv2.circle(frame, (int(px), int(py)), 5, (0, 255, 255), -1)
 
@@ -235,20 +154,15 @@ class FrameAnnotator:
         self,
         frame: np.ndarray,
         player_frames: list[PlayerFrame],
-        ball_frame: BallFrame | None = None,
+        ball_court: tuple[float, float] | None = None,
     ) -> None:
-        """Draw the mini court overlay."""
-        self._mini_court.draw(frame, player_frames, ball_frame)
+        """The mini court overlay; ball_court is the ball's court position."""
+        self._mini_court.draw(frame, player_frames, ball_court)
 
-    def draw_stats_panel(
-        self,
-        frame: np.ndarray,
-        stats: dict[str, str | int | float],
-    ) -> None:
-        """Draw a semi-transparent stats panel in the top-left corner."""
+    def draw_stats_panel(self, frame: np.ndarray, stats: dict[str, str | int | float]) -> None:
+        """A semi-transparent panel of "name: value" lines in the top-left corner."""
         if not stats:
             return
-
         lines = [f"{k}: {v}" for k, v in stats.items()]
         line_h = 22
         panel_h = len(lines) * line_h + 20
@@ -257,95 +171,44 @@ class FrameAnnotator:
         overlay = frame.copy()
         cv2.rectangle(overlay, (5, 5), (5 + panel_w, 5 + panel_h), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-
         for i, line in enumerate(lines):
-            y = 25 + i * line_h
-            cv2.putText(frame, line, (15, y), _FONT, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, line, (15, 25 + i * line_h), _FONT, 0.5, (255, 255, 255), 1)
 
-    def draw_shot_label(
-        self,
-        frame: np.ndarray,
-        shot: Shot | None,
-        ball_frame: BallFrame | None,
-    ) -> None:
-        """Show shot type label near the ball when a shot is detected."""
-        if shot is None or ball_frame is None or ball_frame.bbox is None:
+    def draw_shot_label(self, frame: np.ndarray, label: str | None, ball_frame: BallFrame | None) -> None:
+        """The type of the shot just played, above the ball."""
+        centre = _ball_centre(ball_frame)
+        if not label or centre is None:
             return
-
-        cx = int((ball_frame.bbox.x1 + ball_frame.bbox.x2) / 2)
-        cy = int((ball_frame.bbox.y1 + ball_frame.bbox.y2) / 2) - 20
-        label = shot.shot_type.value.upper()
-
+        cx, cy = centre[0], centre[1] - 20
         (tw, th), _ = cv2.getTextSize(label, _FONT, 0.6, 2)
         cv2.rectangle(frame, (cx - 2, cy - th - 4), (cx + tw + 4, cy + 4), (0, 0, 0), -1)
         cv2.putText(frame, label, (cx, cy), _FONT, 0.6, (0, 255, 255), 2)
 
-    def draw_bounce_impacts(
-        self,
-        frame: np.ndarray,
-        active_bounces: list[tuple[Bounce, float]],
-        calibration: CourtCalibration | None = None,
-    ) -> None:
-        """Draw fading impact marks at bounce locations.
+    def draw_bounces(self, frame: np.ndarray, bounces: list[tuple[tuple[float, float], str, float]]) -> None:
+        """Fading marks where the ball bounced.
 
-        Args:
-            frame: Video frame (BGR, HWC). Modified in-place.
-            active_bounces: List of (Bounce, progress) where progress
-                goes from 0.0 (just occurred) to 1.0 (about to disappear).
-            calibration: Court calibration with homography matrix.
+        bounces: (image position, kind, progress); kind is "ground" or
+        "wall", progress runs from 0.0 (just happened) to 1.0 (about to go).
         """
-        if calibration is None or not active_bounces:
+        if not bounces:
             return
-
-        H = np.array(calibration.homography_matrix)
-        try:
-            H_inv = np.linalg.inv(H)
-        except np.linalg.LinAlgError:
-            return
-
         overlay = frame.copy()
-
-        for bounce, progress in active_bounces:
-            if bounce.position is None:
-                continue
-
-            # Convert court meters → pixel coordinates
-            pt_m = np.array(
-                [[[bounce.position.x, bounce.position.y]]], dtype=np.float64
-            )
-            pt_px = cv2.perspectiveTransform(pt_m, H_inv)[0][0]
-            cx, cy = int(pt_px[0]), int(pt_px[1])
-
+        for (u, v), kind, progress in bounces:
+            cx, cy = int(u), int(v)
             alpha = 1.0 - progress
-            color = _BOUNCE_COLORS.get(bounce.type, (0, 165, 255))
+            color = _BOUNCE_COLORS.get(kind, (0, 165, 255))
 
-            # Outer ring (expanding)
-            radius = int(12 + 8 * progress)
-            thickness = max(1, int(3 * alpha))
-            cv2.circle(overlay, (cx, cy), radius, color, thickness, cv2.LINE_AA)
+            radius = int(12 + 8 * progress)  # outer ring, growing
+            cv2.circle(overlay, (cx, cy), radius, color, max(1, int(3 * alpha)), cv2.LINE_AA)
+            cv2.circle(overlay, (cx, cy), max(1, int(5 * alpha)), color, -1, cv2.LINE_AA)  # dot, shrinking
 
-            # Inner filled dot (shrinking)
-            inner_r = max(1, int(5 * alpha))
-            cv2.circle(overlay, (cx, cy), inner_r, color, -1, cv2.LINE_AA)
-
-            # Type label (visible for first half of duration)
             if progress < 0.5:
-                label = bounce.type.value
-                (tw, _), _ = cv2.getTextSize(label, _FONT_SMALL, 1.0, 1)
-                tx = cx - tw // 2
-                ty = cy - radius - 6
-                cv2.putText(
-                    overlay, label, (tx, ty),
-                    _FONT_SMALL, 1.0, color, 1, cv2.LINE_AA,
-                )
-
-        # Blend overlay onto frame
+                (tw, _), _ = cv2.getTextSize(kind, _FONT_SMALL, 1.0, 1)
+                cv2.putText(overlay, kind, (cx - tw // 2, cy - radius - 6), _FONT_SMALL, 1.0, color, 1, cv2.LINE_AA)
         cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
 
     def draw_frame_number(self, frame: np.ndarray, frame_id: int) -> None:
-        """Draw frame number in the top-left corner."""
-        text = f"Frame: {frame_id}"
-        cv2.putText(frame, text, (10, 30), _FONT, 0.7, (255, 255, 255), 2)
+        cv2.putText(frame, f"Frame: {frame_id}", (10, 30), _FONT, 0.7, (255, 255, 255), 2)
 
     def annotate_frame(
         self,
@@ -354,26 +217,20 @@ class FrameAnnotator:
         player_frames: list[PlayerFrame],
         ball_frame: BallFrame | None = None,
         calibration: CourtCalibration | None = None,
-        shot: Shot | None = None,
+        shot_label: str | None = None,
         stats: dict[str, str | int | float] | None = None,
-        active_bounces: list[tuple[Bounce, float]] | None = None,
+        bounces: list[tuple[tuple[float, float], str, float]] | None = None,
         ball_speed_kmh: float | None = None,
+        ball_court: tuple[float, float] | None = None,
     ) -> np.ndarray:
-        """One-stop method: apply all annotations and return the frame.
+        """Draw everything on the frame (in place) and return it.
 
-        Args:
-            frame: Video frame (BGR, HWC). Modified in-place and returned.
-            frame_id: Current frame index.
-            player_frames: Player tracking data for this frame.
-            ball_frame: Ball tracking data (optional).
-            calibration: Court calibration for line overlay (optional).
-            shot: Active shot event to display label (optional).
-            stats: Stats dict to render in panel (optional).
-            active_bounces: List of (Bounce, progress) for impact marks (optional).
-            ball_speed_kmh: Ball speed to write next to the ball (optional).
-
-        Returns:
-            The annotated frame.
+        shot_label:     shot type to show above the ball
+        stats:          lines for the stats panel
+        bounces:        bounce marks, see draw_bounces()
+        ball_speed_kmh: speed to write next to the ball
+        ball_court:     the ball's position over the court (x, y in metres),
+                        for the mini court
         """
         self.draw_court_lines(frame, calibration)
         self.draw_court_keypoints(frame, calibration)
@@ -381,9 +238,9 @@ class FrameAnnotator:
         self.draw_pose_keypoints(frame, player_frames)
         self.draw_ball(frame, ball_frame)
         self.draw_ball_speed(frame, ball_frame, ball_speed_kmh)
-        self.draw_bounce_impacts(frame, active_bounces or [], calibration)
-        self.draw_shot_label(frame, shot, ball_frame)
-        self.draw_mini_court(frame, player_frames, ball_frame)
+        self.draw_bounces(frame, bounces or [])
+        self.draw_shot_label(frame, shot_label, ball_frame)
+        self.draw_mini_court(frame, player_frames, ball_court)
         if stats:
             self.draw_stats_panel(frame, stats)
         self.draw_frame_number(frame, frame_id)

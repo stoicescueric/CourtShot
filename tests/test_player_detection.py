@@ -1,273 +1,181 @@
 """
-Project: Padex
-File Created: 2026-03-03
-Author: Xingnan Zhu
-File Name: test_player_detection.py
-Description:
-    Tests for player detection, tracking, and team classification.
-    Unit tests use synthetic data; integration tests use video + YOLO model.
+Tests for player detection: who is kept in a frame, where they stand on the
+court, and how pose is attached. The YOLO models are replaced by stand-ins.
 """
 
-from pathlib import Path
+from __future__ import annotations
 
-import cv2
 import numpy as np
-import pytest
 
-from padex.schemas.tracking import BoundingBox, PlayerFrame, Position2D
+from padex.schemas.tracking import BoundingBox, PoseKeypoint
 from padex.tracking.player import (
-    JerseyColorTeamClassifier,
+    COCO_KEYPOINT_NAMES,
     PlayerDetector,
     RawDetection,
+    YoloPoseEstimator,
+    foot_position,
+    iou_matrix,
 )
 
-VIDEO_PATH = Path("assets/raw/video/TapiaChingottoLebronGalanHighlights_1080p.mp4")
-MODEL_PATH = Path("yolo26m.pt")
+FRAME = np.zeros((8, 8, 3), np.uint8)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+def _det(x: float, conf: float, track_id: int | None = None) -> RawDetection:
+    """A person standing at court x (with an identity homography), feet at y = 5."""
+    return RawDetection(bbox=BoundingBox(x1=x, y1=0.0, x2=x + 0.5, y2=5.0), confidence=conf, track_id=track_id)
 
 
-def _make_detection(
-    x1=100, y1=50, x2=200, y2=300, conf=0.9, track_id=None, color=(0, 0, 255)
-) -> RawDetection:
-    """Create a RawDetection with a solid-colored crop."""
-    crop = np.full((y2 - y1, x2 - x1, 3), color, dtype=np.uint8)
-    return RawDetection(
-        bbox=BoundingBox(x1=float(x1), y1=float(y1), x2=float(x2), y2=float(y2)),
-        confidence=conf,
-        track_id=track_id,
-        crop=crop,
-    )
+class _FixedTracker:
+    """Stands in for YoloPersonTracker: the same detections every frame."""
+
+    def __init__(self, dets):
+        self.dets = dets
+        self.resets = 0
+
+    def track(self, frame):
+        return list(self.dets)
+
+    def reset(self):
+        self.resets += 1
 
 
-# ---------------------------------------------------------------------------
-# Unit tests — no video or model needed
-# ---------------------------------------------------------------------------
+class _RecordingPose:
+    """Stands in for YoloPoseEstimator; records how it was called."""
+
+    def __init__(self, keypoints=()):
+        self.keypoints = list(keypoints)
+        self.full_frame_runs = 0
+        self.estimate_kwargs = []
+
+    def predict_full_frame(self, frame):
+        self.full_frame_runs += 1
+        return None
+
+    def estimate(self, frame, bboxes, **kwargs):
+        self.estimate_kwargs.append(kwargs)
+        return [list(self.keypoints) for _ in bboxes]
+
+    def reset(self):
+        pass
 
 
-class TestRawDetection:
-    def test_creation(self):
-        det = _make_detection()
-        assert det.confidence == 0.9
-        assert det.track_id is None
-
-    def test_with_track_id(self):
-        det = _make_detection(track_id=5)
-        assert det.track_id == 5
+def _detector(dets, pose=None, **kwargs) -> PlayerDetector:
+    return PlayerDetector(tracker=_FixedTracker(dets), pose=pose, **kwargs)
 
 
-class TestBboxFootPosition:
-    def test_foot_position_center_bottom(self):
-        bbox = BoundingBox(x1=100, y1=50, x2=200, y2=300)
-        foot = PlayerDetector._bbox_foot_position(bbox)
-        assert foot == (150.0, 300.0)
-
-    def test_foot_position_asymmetric(self):
-        bbox = BoundingBox(x1=0, y1=0, x2=80, y2=200)
-        foot = PlayerDetector._bbox_foot_position(bbox)
-        assert foot == (40.0, 200.0)
+class TestFootPosition:
+    def test_bottom_centre_of_the_box(self):
+        assert foot_position(BoundingBox(x1=100, y1=50, x2=200, y2=300)) == (150.0, 300.0)
+        assert foot_position(BoundingBox(x1=0, y1=0, x2=80, y2=200)) == (40.0, 200.0)
 
 
-class TestGhostFiltering:
+class TestCourtFilter:
+    """With an identity homography, pixel coordinates are court metres."""
+
+    H = np.eye(3)
+
     def setup_method(self):
-        # Use a mock strategy that won't be called
-        self.detector = PlayerDetector.__new__(PlayerDetector)
-        self.detector.MAX_PLAYERS = 4
-        self.detector.COURT_MARGIN_M = 1.0
+        self.detector = _detector([])
 
-    def test_detection_inside_court_passes(self):
-        # Identity homography: pixel coords == court coords
-        H = np.eye(3)
-        bbox = BoundingBox(x1=4.0, y1=0.0, x2=6.0, y2=10.0)
-        result = self.detector._pixel_to_court(bbox, H)
-        assert result is not None
-        assert 0 <= result[0] <= 10
-        assert 0 <= result[1] <= 20
+    def test_inside_the_court(self):
+        assert self.detector._pixel_to_court(BoundingBox(x1=4.0, y1=0.0, x2=6.0, y2=10.0), self.H) == (5.0, 10.0)
 
-    def test_detection_outside_court_rejected(self):
-        H = np.eye(3)
-        bbox = BoundingBox(x1=50.0, y1=0.0, x2=60.0, y2=100.0)
-        result = self.detector._pixel_to_court(bbox, H)
-        assert result is None
+    def test_far_outside_is_dropped(self):
+        assert self.detector._pixel_to_court(BoundingBox(x1=50.0, y1=0.0, x2=60.0, y2=100.0), self.H) is None
 
-    def test_detection_within_margin_passes(self):
-        H = np.eye(3)
-        # Foot at (5.0, 10.5) — within 1m margin of court edge (y max = 20)
-        bbox = BoundingBox(x1=4.0, y1=0.0, x2=6.0, y2=10.5)
-        result = self.detector._pixel_to_court(bbox, H)
-        assert result is not None
+    def test_within_the_margin_is_kept_and_clamped_onto_the_court(self):
+        # feet at (5.0, 20.5): half a metre behind the back wall
+        assert self.detector._pixel_to_court(BoundingBox(x1=4.0, y1=0.0, x2=6.0, y2=20.5), self.H) == (5.0, 20.0)
 
-    def test_position_clamped_to_bounds(self):
-        H = np.eye(3)
-        # Foot at (5.0, 20.5) — within margin but > 20, should clamp
-        bbox = BoundingBox(x1=4.0, y1=0.0, x2=6.0, y2=20.5)
-        result = self.detector._pixel_to_court(bbox, H)
-        assert result is not None
-        assert result[1] == 20.0  # clamped
+    def test_people_outside_the_court_never_become_players(self):
+        dets = [_det(5.0, 0.9), _det(40.0, 0.95)]
+        out = _detector(dets).detect_and_track(FRAME, 0, 0.0, self.H)
+        assert [pf.confidence for pf in out] == [0.9]
+
+    def test_without_a_calibration_everyone_is_kept_without_a_position(self):
+        out = _detector([_det(5.0, 0.9), _det(40.0, 0.95)]).detect_and_track(FRAME, 0, 0.0, None)
+        assert len(out) == 2 and all(pf.position is None for pf in out)
 
 
-class TestJerseyColorClassifier:
-    def test_two_distinct_colors(self):
-        """Red and blue crops should be classified into different teams."""
-        classifier = JerseyColorTeamClassifier(n_warmup_frames=1)
+class TestPlayerCap:
+    DETS = [_det(float(i), 0.9 - 0.1 * i) for i in range(6)]
 
-        # Create 2 red + 2 blue detections
-        red = (0, 0, 255)
-        blue = (255, 0, 0)
-        dets = [
-            _make_detection(track_id=1, color=red),
-            _make_detection(track_id=2, color=blue),
-            _make_detection(track_id=3, color=red),
-            _make_detection(track_id=4, color=blue),
+    def test_default_keeps_the_four_most_confident(self):
+        out = _detector(self.DETS).detect_and_track(FRAME, 0, 0.0, np.eye(3))
+        assert [round(pf.confidence, 1) for pf in out] == [0.9, 0.8, 0.7, 0.6]
+
+    def test_higher_cap_keeps_the_extra_candidates(self):
+        out = _detector(self.DETS, max_players=8).detect_and_track(FRAME, 0, 0.0, np.eye(3))
+        assert len(out) == 6
+
+    def test_cap_does_not_leak_between_detectors(self):
+        _detector(self.DETS, max_players=8)
+        assert len(_detector(self.DETS).detect_and_track(FRAME, 0, 0.0, np.eye(3))) == 4
+
+
+class TestPlayerIds:
+    def test_tracked_and_untracked_ids(self):
+        out = _detector([_det(1.0, 0.9, track_id=5), _det(3.0, 0.8)]).detect_and_track(FRAME, 7, 280.0, np.eye(3))
+        assert [pf.player_id for pf in out] == ["P_005", "P_det_001"]
+        assert all(pf.frame_id == 7 and pf.timestamp_ms == 280.0 and pf.team_id is None for pf in out)
+
+    def test_reset_reaches_the_tracker(self):
+        d = _detector([])
+        d.reset()
+        assert d.tracker.resets == 1
+
+
+class TestPose:
+    DETS = [_det(1.0, 0.9, track_id=1)]
+
+    def test_default_runs_the_full_frame_pass_once(self):
+        pose = _RecordingPose()
+        _detector(self.DETS, pose, pose_closeups_only=False).detect_and_track(FRAME, 0, 0.0, np.eye(3))
+        # either ahead of time on the worker thread, or inside estimate()
+        ran_ahead = pose.full_frame_runs == 1 and "full_frame" in pose.estimate_kwargs[0]
+        left_to_estimate = pose.full_frame_runs == 0 and pose.estimate_kwargs == [{}]
+        assert ran_ahead or left_to_estimate
+
+    def test_closeups_only_skips_the_full_frame_pass(self):
+        pose = _RecordingPose()
+        _detector(self.DETS, pose, pose_closeups_only=True).detect_and_track(FRAME, 0, 0.0, np.eye(3))
+        assert pose.full_frame_runs == 0
+        assert pose.estimate_kwargs == [{"full_frame": None}]
+
+    def test_keypoints_of_a_tracked_player_are_smoothed_over_time(self):
+        pose = _RecordingPose([PoseKeypoint(name="nose", x=100.0, y=50.0, confidence=1.0)])
+        d = _detector(self.DETS, pose, pose_closeups_only=True)
+        first = d.detect_and_track(FRAME, 0, 0.0, np.eye(3))[0].keypoints[0]
+        pose.keypoints = [PoseKeypoint(name="nose", x=200.0, y=50.0, confidence=1.0)]
+        second = d.detect_and_track(FRAME, 1, 40.0, np.eye(3))[0].keypoints[0]
+        assert first.x == 100.0
+        assert second.x == 100.0 + PlayerDetector.POSE_SMOOTHING * 100.0  # part of the way to the new place
+
+
+class TestPoseMatching:
+    def test_iou_matrix(self):
+        boxes = [BoundingBox(x1=0, y1=0, x2=10, y2=10), BoundingBox(x1=100, y1=100, x2=110, y2=110)]
+        dets = np.array([[0, 0, 10, 10], [5, 0, 15, 10], [200, 200, 210, 210]], dtype=np.float32)
+        iou = iou_matrix(boxes, dets)
+        assert iou.shape == (2, 3)
+        np.testing.assert_allclose(iou[0], [1.0, 1 / 3, 0.0])
+        np.testing.assert_allclose(iou[1], 0.0)
+        assert iou_matrix([], dets).shape == (0, 3)
+
+    def test_each_pose_goes_to_the_box_it_overlaps(self):
+        est = YoloPoseEstimator(model_path="unused.pt", crop_fallback=False)
+        est._model = object()  # never called: the full-frame result is handed in
+        boxes = [
+            BoundingBox(x1=0, y1=0, x2=10, y2=20),
+            BoundingBox(x1=50, y1=0, x2=60, y2=20),
+            BoundingBox(x1=200, y1=0, x2=210, y2=20),
         ]
-
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-
-        # Warmup frame
-        classifier.classify(dets, frame)
-        # Actual classification
-        result = classifier.classify(dets, frame)
-
-        assert len(result) == 4
-        # Red detections should share one team, blue another
-        assert result[0] == result[2]  # both red
-        assert result[1] == result[3]  # both blue
-        assert result[0] != result[1]  # different teams
-
-    def test_returns_empty_during_warmup(self):
-        classifier = JerseyColorTeamClassifier(n_warmup_frames=5)
-        dets = [_make_detection(track_id=1), _make_detection(track_id=2)]
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-
-        result = classifier.classify(dets, frame)
-        assert result == {}
-
-    def test_single_detection_returns_empty(self):
-        classifier = JerseyColorTeamClassifier(n_warmup_frames=1)
-        dets = [_make_detection(track_id=1)]
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        result = classifier.classify(dets, frame)
-        assert result == {}
-
-    def test_small_crop_skipped(self):
-        classifier = JerseyColorTeamClassifier(min_crop_height=100)
-        det = _make_detection(y1=0, y2=10)  # only 10px tall
-        dets = [det, _make_detection()]
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        result = classifier.classify(dets, frame)
-        assert result == {}
-
-    def test_reset_clears_state(self):
-        classifier = JerseyColorTeamClassifier(n_warmup_frames=1)
-        dets = [_make_detection(track_id=1), _make_detection(track_id=2)]
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        classifier.classify(dets, frame)
-        classifier.classify(dets, frame)
-        assert classifier._centers is not None
-
-        classifier.reset()
-        assert classifier._centers is None
-        assert classifier._frame_count == 0
-
-    def test_kmeans_2_basic(self):
-        """Two well-separated clusters should be found."""
-        cluster_a = np.random.randn(10, 4) + np.array([10, 0, 0, 0])
-        cluster_b = np.random.randn(10, 4) + np.array([-10, 0, 0, 0])
-        features = np.vstack([cluster_a, cluster_b]).astype(np.float32)
-
-        centers = JerseyColorTeamClassifier._kmeans_2(features)
-        assert centers.shape == (2, 4)
-        # Centers should be near [10, 0, 0, 0] and [-10, 0, 0, 0]
-        center_xs = sorted(centers[:, 0])
-        assert center_xs[0] < -5
-        assert center_xs[1] > 5
-
-
-class TestPlayerIdFormatting:
-    def test_tracked_id(self):
-        assert f"P_{5:03d}" == "P_005"
-        assert f"P_{12:03d}" == "P_012"
-
-    def test_untracked_id(self):
-        assert f"P_det_{0:03d}" == "P_det_000"
-        assert f"P_det_{3:03d}" == "P_det_003"
-
-
-# ---------------------------------------------------------------------------
-# Integration tests — require video + YOLO model
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skipif(
-    not VIDEO_PATH.exists() or not MODEL_PATH.exists(),
-    reason="Test video or YOLO model not available",
-)
-class TestWithVideoAndModel:
-    @pytest.fixture(autouse=True)
-    def setup(self):
-        from padex.io.video import VideoReader
-
-        self.reader = VideoReader(VIDEO_PATH)
-        self.detector = PlayerDetector(model_path=str(MODEL_PATH))
-        yield
-        self.reader.__exit__(None, None, None)
-
-    def test_detect_single_frame(self):
-        frame = self.reader.read_frame(3000)
-        results = self.detector.detect(frame, frame_id=3000, timestamp_ms=100000.0)
-        assert isinstance(results, list)
-        for pf in results:
-            assert isinstance(pf, PlayerFrame)
-            assert 0 < pf.confidence <= 1.0
-            assert pf.keypoints == []
-
-    def test_detect_returns_at_most_4(self):
-        for fid, ts, frame in self.reader.frames(start_frame=3000, end_frame=3100):
-            results = self.detector.detect(frame, frame_id=fid, timestamp_ms=ts)
-            assert len(results) <= 4
-
-    def test_tracking_stable_ids(self):
-        ids_per_frame = []
-        for fid, ts, frame in self.reader.frames(start_frame=3000, end_frame=3030):
-            results = self.detector.detect_and_track(
-                frame, frame_id=fid, timestamp_ms=ts
-            )
-            ids_per_frame.append({pf.player_id for pf in results})
-
-        # Most IDs should persist across adjacent frames
-        for i in range(1, len(ids_per_frame)):
-            if ids_per_frame[i] and ids_per_frame[i - 1]:
-                overlap = ids_per_frame[i] & ids_per_frame[i - 1]
-                assert len(overlap) >= 2
-
-    def test_team_classification_two_teams(self):
-        detector = PlayerDetector(model_path=str(MODEL_PATH))
-        team_ids = set()
-        for fid, ts, frame in self.reader.frames(start_frame=3000, end_frame=3100):
-            results = detector.detect_and_track(
-                frame, frame_id=fid, timestamp_ms=ts
-            )
-            for pf in results:
-                if pf.team_id is not None:
-                    team_ids.add(pf.team_id)
-        assert len(team_ids) == 2
-
-    def test_court_position_with_homography(self):
-        from padex.tracking.court import CourtDetector
-
-        court_det = CourtDetector()
-        frame = self.reader.read_frame(3000)
-        cal = court_det.calibrate_frame(frame)
-        if cal is None:
-            pytest.skip("Could not calibrate this frame")
-        H = np.array(cal.homography_matrix)
-        results = self.detector.detect(
-            frame, frame_id=3000, timestamp_ms=100000.0, homography_matrix=H
-        )
-        for pf in results:
-            if pf.position is not None:
-                assert 0 <= pf.position.x <= 10
-                assert 0 <= pf.position.y <= 20
+        det_xyxy = np.array([[51, 0, 61, 20], [0, 1, 10, 20]], dtype=np.float32)  # in the other order
+        xy = np.zeros((2, 17, 2), np.float32)
+        xy[0, :, 0], xy[1, :, 0] = 55.0, 5.0
+        conf = np.full((2, 17), 0.9, np.float32)
+        conf[1, 0] = 0.0  # a keypoint that was not found is left out
+        out = est.estimate(FRAME, boxes, full_frame=(det_xyxy, xy, conf))
+        assert [kp.x for kp in out[0]] == [5.0] * 16 and out[0][0].name == COCO_KEYPOINT_NAMES[1]
+        assert [kp.x for kp in out[1]] == [55.0] * 17
+        assert out[2] == []  # nobody near the third box

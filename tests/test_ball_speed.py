@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-import ball3d
+from padex.analysis import ball_flight as ball3d
 from padex.schemas.tracking import BallFrame, BoundingBox
 from padex.viz.frame import FrameAnnotator
 
@@ -26,10 +26,10 @@ def _speeds(*flights) -> dict[int, float]:
 
 class TestFrameSpeeds:
     def test_starts_at_the_launch_speed_and_slows_down(self):
-        sp = _speeds(_flight(1.0, 1.6, 20.0))            # 72 km/h
+        sp = _speeds(_flight(1.0, 1.6, 20.0))  # 72 km/h
         assert sorted(sp) == list(range(25, 41))
         assert 66.0 < sp[25] <= 72.5
-        assert sp[25] > sp[30] > sp[35]                  # air drag
+        assert sp[25] > sp[30] > sp[35]  # air drag
         assert all(40.0 < v < 73.0 for v in sp.values())
 
     def test_poor_fits_give_no_speed(self):
@@ -38,7 +38,7 @@ class TestFrameSpeeds:
     def test_no_speed_between_flights(self):
         sp = _speeds(_flight(1.0, 1.4, 20.0), _flight(2.0, 2.4, 10.0))
         assert 40 not in sp and 45 not in sp
-        assert sp[50] < 40.0 < sp[25]                    # each frame takes its own flight's speed
+        assert sp[50] < 40.0 < sp[25]  # each frame takes its own flight's speed
 
     def test_a_hit_does_not_leak_into_the_next_flight(self):
         # 108 km/h, then a soft 18 km/h shot straight after: no frame may average the two
@@ -51,21 +51,22 @@ class TestFrameSpeeds:
 
 class TestSpeedLabel:
     def _ball(self, x: float, y: float) -> BallFrame:
-        return BallFrame(frame_id=0, timestamp_ms=0.0, bbox=BoundingBox(x1=x - 4, y1=y - 4, x2=x + 4, y2=y + 4),
-                         confidence=0.9)
+        return BallFrame(
+            frame_id=0, timestamp_ms=0.0, bbox=BoundingBox(x1=x - 4, y1=y - 4, x2=x + 4, y2=y + 4), confidence=0.9
+        )
 
     def test_label_is_drawn_next_to_the_ball(self):
         frame = np.zeros((720, 1280, 3), np.uint8)
         FrameAnnotator().draw_ball_speed(frame, self._ball(600, 300), 87.4)
         ys, xs = np.nonzero(frame.any(axis=2))
         assert len(xs) > 50
-        assert xs.min() >= 600 and xs.max() < 800 and 290 < ys.min() and ys.max() < 345
+        assert xs.min() >= 600 and xs.max() < 800 and ys.min() > 290 and ys.max() < 345
 
     def test_label_stays_inside_the_frame_at_the_edges(self):
         for x, y in ((1275, 300), (5, 5), (1275, 715), (640, 716)):
             frame = np.zeros((720, 1280, 3), np.uint8)
             FrameAnnotator().draw_ball_speed(frame, self._ball(x, y), 123.0)
-            assert frame.any()      # drawn, and cv2 did not have to clip it away entirely
+            assert frame.any()  # drawn, and cv2 did not have to clip it away entirely
 
     def test_nothing_drawn_without_a_speed_or_without_the_ball(self):
         frame = np.zeros((720, 1280, 3), np.uint8)

@@ -1,45 +1,30 @@
 """
-Project: Padex
-File Created: 2026-03-03
-Author: Xingnan Zhu
-File Name: tracking.py
-Description:
-    Pydantic models for Layer 1: Tracking data.
-    Defines Position2D/3D, PlayerFrame, BallFrame, CourtCalibration.
+Tracking data: what the detectors write for every frame, and the court
+calibration that turns image pixels into court metres.
+
+Court frame: origin at the near-left corner, x = 0..10 m across, y = 0..20 m
+along, net at y = 10.
+
+These classes are what a tracking cache holds, so they live at a fixed import
+path (see padex.tracking.cache).
+
+Original author: Xingnan Zhu.
 """
 
 from __future__ import annotations
 
-from enum import Enum
-
 from pydantic import BaseModel, Field
 
 
-class BallVisibility(str, Enum):
-    """Ball visibility state in a given frame."""
-
-    VISIBLE = "visible"
-    OCCLUDED = "occluded"
-    INFERRED = "inferred"
-
-
 class Position2D(BaseModel):
-    """2D position on the court in meters. Origin at bottom-left corner."""
+    """A point on the court floor, in metres."""
 
-    x: float = Field(..., ge=0, le=10, description="Width axis (0–10m)")
-    y: float = Field(..., ge=0, le=20, description="Length axis (0–20m)")
-
-
-class Position3D(BaseModel):
-    """3D position with optional height."""
-
-    x: float = Field(..., ge=0, le=10)
-    y: float = Field(..., ge=0, le=20)
-    z: float = Field(0.0, ge=0, description="Height in meters")
+    x: float = Field(..., ge=0, le=10, description="Across the court (0-10 m)")
+    y: float = Field(..., ge=0, le=20, description="Along the court (0-20 m)")
 
 
 class BoundingBox(BaseModel):
-    """Pixel-space bounding box."""
+    """A box in image pixels."""
 
     x1: float
     y1: float
@@ -48,7 +33,7 @@ class BoundingBox(BaseModel):
 
 
 class PoseKeypoint(BaseModel):
-    """Single keypoint from pose estimation."""
+    """One body keypoint (COCO name) in image pixels."""
 
     name: str
     x: float
@@ -57,27 +42,25 @@ class PoseKeypoint(BaseModel):
 
 
 class PlayerFrame(BaseModel):
-    """Per-frame tracking data for a single player."""
+    """One player in one frame."""
 
     frame_id: int
     timestamp_ms: float
     player_id: str
     team_id: str | None = None
     bbox: BoundingBox
-    position: Position2D | None = None
+    position: Position2D | None = None  # feet on the court; None without a calibration
     confidence: float = Field(..., ge=0, le=1)
     keypoints: list[PoseKeypoint] = Field(default_factory=list)
 
 
 class BallFrame(BaseModel):
-    """Per-frame tracking data for the ball."""
+    """The ball in one frame; bbox is None when it was not found."""
 
     frame_id: int
     timestamp_ms: float
     bbox: BoundingBox | None = None
-    position: Position3D | None = None
     confidence: float = Field(0.0, ge=0, le=1)
-    visibility: BallVisibility = BallVisibility.VISIBLE
     candidates: list[tuple[float, float, float]] = Field(
         default_factory=list,
         description="All ball-like detections in this frame as (x, y, confidence) "
@@ -87,20 +70,18 @@ class BallFrame(BaseModel):
 
 
 class CourtCalibration(BaseModel):
-    """Homography calibration from pixel coordinates to court coordinates."""
+    """Homography from image pixels to court metres (valid on the floor)."""
 
     schema_version: str = "0.1.0"
     frame_width: int
     frame_height: int
-    homography_matrix: list[list[float]] = Field(
-        ..., description="3x3 homography matrix as nested list"
-    )
+    homography_matrix: list[list[float]] = Field(..., description="3x3 homography matrix as nested list")
     court_keypoints_px: list[tuple[float, float]] = Field(
         default_factory=list,
-        description="Detected court keypoints in pixel coordinates",
+        description="Court keypoints in pixel coordinates",
     )
     court_keypoints_m: list[tuple[float, float]] = Field(
         default_factory=list,
-        description="Corresponding court keypoints in meters",
+        description="The same keypoints in metres",
     )
     reprojection_error: float | None = None

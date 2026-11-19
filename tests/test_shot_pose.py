@@ -1,26 +1,33 @@
 """
-Tests for shot_pose.py (what the hitter's body did around a hit) and for the
-two places that use it: ball_track drops "hits" by players standing still,
-match_stats takes overhead / not overhead from the pose.
+Tests for padex.analysis.swing (what the hitter's body did around a hit) and for the
+two places that use it: ball_events drops "hits" by players standing still,
+shots takes overhead / not overhead from the pose.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-import ball_track as bt
-import match_stats as ms
 import numpy as np
-import shot_pose as sp
 
+from padex.analysis import ball_events as bt
+from padex.analysis import shots as ms
+from padex.analysis import swing as sp
 from padex.schemas.tracking import BoundingBox, PlayerFrame, PoseKeypoint, Position2D
 
 FPS = 25.0
-HIT = 20            # frame of the hit in every test
+HIT = 20  # frame of the hit in every test
 
 
-def _body(frame: int, wrist=(0.3, 0.8), elbow=(0.3, 0.4), scale: float = 100.0, origin=(500.0, 300.0),
-          wrist_conf: float = 0.9, player: str = "P_1") -> PlayerFrame:
+def _body(
+    frame: int,
+    wrist=(0.3, 0.8),
+    elbow=(0.3, 0.4),
+    scale: float = 100.0,
+    origin=(500.0, 300.0),
+    wrist_conf: float = 0.9,
+    player: str = "P_1",
+) -> PlayerFrame:
     """A player seen from behind. Units of the offsets: torso lengths, from the
     middle of the shoulder line, y down. The right arm is the one described;
     the left one hangs."""
@@ -30,14 +37,26 @@ def _body(frame: int, wrist=(0.3, 0.8), elbow=(0.3, 0.4), scale: float = 100.0, 
         return PoseKeypoint(name=name, x=ox + x * scale, y=oy + y * scale, confidence=conf)
 
     pts = [
-        kp("nose", 0, -0.3), kp("left_shoulder", -0.2, 0), kp("right_shoulder", 0.2, 0),
-        kp("left_elbow", -0.3, 0.4), kp("left_wrist", -0.3, 0.8),
-        kp("right_elbow", *elbow), kp("right_wrist", *wrist, conf=wrist_conf),
-        kp("left_hip", -0.15, 1.0), kp("right_hip", 0.15, 1.0),
+        kp("nose", 0, -0.3),
+        kp("left_shoulder", -0.2, 0),
+        kp("right_shoulder", 0.2, 0),
+        kp("left_elbow", -0.3, 0.4),
+        kp("left_wrist", -0.3, 0.8),
+        kp("right_elbow", *elbow),
+        kp("right_wrist", *wrist, conf=wrist_conf),
+        kp("left_hip", -0.15, 1.0),
+        kp("right_hip", 0.15, 1.0),
     ]
-    return PlayerFrame(frame_id=frame, timestamp_ms=1000 * frame / FPS, player_id=player, team_id="T_1",
-                       bbox=BoundingBox(x1=ox - 0.5 * scale, y1=oy - 0.5 * scale, x2=ox + 0.5 * scale, y2=oy + 2.2 * scale),
-                       position=Position2D(x=5.0, y=4.0), confidence=0.9, keypoints=pts)
+    return PlayerFrame(
+        frame_id=frame,
+        timestamp_ms=1000 * frame / FPS,
+        player_id=player,
+        team_id="T_1",
+        bbox=BoundingBox(x1=ox - 0.5 * scale, y1=oy - 0.5 * scale, x2=ox + 0.5 * scale, y2=oy + 2.2 * scale),
+        position=Position2D(x=5.0, y=4.0),
+        confidence=0.9,
+        keypoints=pts,
+    )
 
 
 def _swing(frames) -> sp.Swing | None:
@@ -54,8 +73,15 @@ def _forehand(**kw):
 
 
 def _overhead(**kw):
-    return [_body(f, wrist=(0.3, -0.9) if abs(f - HIT) < 4 else (0.3, 0.8),
-                  elbow=(0.35, -0.3) if abs(f - HIT) < 4 else (0.3, 0.4), **kw) for f in range(0, 40)]
+    return [
+        _body(
+            f,
+            wrist=(0.3, -0.9) if abs(f - HIT) < 4 else (0.3, 0.8),
+            elbow=(0.35, -0.3) if abs(f - HIT) < 4 else (0.3, 0.4),
+            **kw,
+        )
+        for f in range(0, 40)
+    ]
 
 
 class TestSwing:
@@ -95,7 +121,7 @@ class TestSwing:
 
 
 # ---------------------------------------------------------------------------
-# ball_track: a ball passing above a player who is standing still
+# ball_events: a ball passing above a player who is standing still
 # ---------------------------------------------------------------------------
 
 
@@ -130,7 +156,7 @@ class TestStandingPlayerDidNotHit:
 
 
 # ---------------------------------------------------------------------------
-# match_stats: overhead from the pose
+# shots: overhead from the pose
 # ---------------------------------------------------------------------------
 
 
@@ -163,12 +189,18 @@ class TestOverheadFromPose:
     def test_only_an_overhead_answer_a_second_later_makes_a_lob(self):
         def first_type(gap_s: float) -> str:
             frames = [f.model_copy(update={"keypoints": []}) for f in _standing()]
-            frames += [f.model_copy(update={"keypoints": [], "frame_id": f.frame_id + 30}) for f in _standing(player="P_3")]
+            frames += [
+                f.model_copy(update={"keypoints": [], "frame_id": f.frame_id + 30}) for f in _standing(player="P_3")
+            ]
             t2 = HIT / FPS + gap_s
-            hits = [bt.BallEvent(HIT, HIT / FPS, "hit", (500.0, 400.0), "P_1", (5.0, 4.0)),
-                    bt.BallEvent(t2 * FPS, t2, "hit", (500.0, 200.0), "P_3", (5.0, 16.0))]
-            shots = [bt.Shot("P_1", "T_1", HIT / FPS, (5.0, 4.0), None, None, None, False, None, 0),
-                     bt.Shot("P_3", "T_2", t2, (5.0, 16.0), None, None, None, False, None, 0)]
+            hits = [
+                bt.BallEvent(HIT, HIT / FPS, "hit", (500.0, 400.0), "P_1", (5.0, 4.0)),
+                bt.BallEvent(t2 * FPS, t2, "hit", (500.0, 200.0), "P_3", (5.0, 16.0)),
+            ]
+            shots = [
+                bt.Shot("P_1", "T_1", HIT / FPS, (5.0, 4.0), None, None, None, False, None, 0),
+                bt.Shot("P_3", "T_2", t2, (5.0, 16.0), None, None, None, False, None, 0),
+            ]
             ball = bt.BallResult(0.9, 0.9, [], hits, shots, rallies=[(0.0, 4.0, 2)])
             out = ms.build_shots(ball, SimpleNamespace(player_frames=frames), {"P_1": "T_1", "P_3": "T_2"}, None, FPS)
             assert out[1].overhead

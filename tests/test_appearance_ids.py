@@ -9,10 +9,10 @@ from __future__ import annotations
 import json
 import pickle
 
-import appearance as ap
 import numpy as np
-import stable_ids as si
 
+from padex.analysis import appearance as ap
+from padex.analysis import identities as si
 from padex.schemas.tracking import BoundingBox, PlayerFrame, Position2D
 from padex.tracking.pipeline import TrackingResult
 
@@ -74,8 +74,8 @@ class TestAppearanceLookup:
         v1, v2 = app.vector(100, "P_001"), app.vector(100, "P_002")
         assert v1 is not None and v2 is not None
         assert abs(float(np.linalg.norm(v1)) - 1.0) < 1e-5
-        assert float(v1 @ app.vector(500, "P_001")) > 0.99   # same person, another time
-        assert float(v1 @ v2) < 0.9                           # another person
+        assert float(v1 @ app.vector(500, "P_001")) > 0.99  # same person, another time
+        assert float(v1 @ v2) < 0.9  # another person
 
     def test_unknown_or_untracked_detection_has_no_vector(self):
         app = _looks(lambda f, tid: tid, _distinct_looks())
@@ -97,9 +97,12 @@ class TestSavedAppearance:
 
     def _save(self, cache):
         np.savez_compressed(
-            ap.sidecar(cache), key=json.dumps(ap._key(cache)),
-            frames=np.array([0, 5], np.int32), track_ids=np.array([1, 1], np.int32),
-            vectors=np.eye(2, 8, dtype=np.float16), fps=np.float32(FPS),
+            ap.sidecar(cache),
+            key=json.dumps(ap._key(cache)),
+            frames=np.array([0, 5], np.int32),
+            track_ids=np.array([1, 1], np.int32),
+            vectors=np.eye(2, 8, dtype=np.float16),
+            fps=np.float32(FPS),
         )
 
     def test_saved_vectors_are_reused_for_their_tracking(self, tmp_path):
@@ -113,7 +116,7 @@ class TestSavedAppearance:
         self._save(cache)
         with open(cache, "wb") as f:
             pickle.dump(TrackingResult(player_frames=_frames()[:4]), f)
-        assert ap.appearance_for(cache) is None   # no video given, so nothing to remake them from
+        assert ap.appearance_for(cache) is None  # no video given, so nothing to remake them from
 
     def test_nothing_saved_and_no_video(self, tmp_path):
         assert ap.appearance_for(self._cache(tmp_path)) is None
@@ -137,6 +140,7 @@ class TestFixSwaps:
             if f >= self.SWAP_AT and tid in (a, b):
                 return b if tid == a else a
             return tid
+
         return person
 
     def test_without_appearance_the_swap_goes_unnoticed(self):
@@ -175,7 +179,7 @@ class TestFixSwaps:
 
     def test_lookalike_partners_are_never_switched(self):
         looks = _distinct_looks()
-        looks[2] = looks[1].copy()   # persons 1 and 2 in identical kit
+        looks[2] = looks[1].copy()  # persons 1 and 2 in identical kit
         for seed in range(5):
             app = _looks(self._person_of_tid(1, 2), looks, noise=0.3, seed=seed)
             mapper = si.StablePlayerIds()
@@ -188,6 +192,7 @@ class TestFixSwaps:
             if 400 <= f < 450 and tid in (1, 2):
                 return 3 - tid
             return tid
+
         mapper = si.StablePlayerIds()
         mapper.apply(_frames(), _looks(person, _distinct_looks()))
         assert mapper.report["swaps_fixed"] == []
@@ -196,4 +201,4 @@ class TestFixSwaps:
         frames = [pf for pf in self._swapped_frames(1, 2) if not 600 <= pf.frame_id < 610]
         app = _looks(self._person_of_tid(1, 2), _distinct_looks())
         slots = _slot_of_spot(si.StablePlayerIds().apply(frames, app))
-        assert slots[605][SPOTS[1]] == "P_2"   # interpolated frame, after the swap
+        assert slots[605][SPOTS[1]] == "P_2"  # interpolated frame, after the swap
