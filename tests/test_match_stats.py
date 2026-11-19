@@ -52,8 +52,12 @@ class TestClassify:
         assert kind(apex=None, air_time=None, answered_overhead=True) == "lob"
         assert kind(apex=2.0, air_time=0.9) == "drive"
 
-    def test_an_overhead_is_never_a_lob(self):
-        assert kind(height_rel=1.3, apex=6.0, speed_kmh=40.0) == "bandeja_vibora"
+    def test_an_overhead_seen_in_the_pose_is_never_a_lob(self):
+        assert kind(overhead=True, overhead_by_pose=True, apex=6.0, speed_kmh=40.0) == "bandeja_vibora"
+        assert kind(height_rel=1.3, apex=3.0, speed_kmh=40.0) == "bandeja_vibora"
+
+    def test_ball_above_the_head_that_then_climbs_like_a_lob_is_a_lob(self):
+        assert kind(height_rel=1.3, apex=6.0, speed_kmh=40.0) == "lob"
 
     def test_volley_is_taken_before_the_bounce_near_the_net(self):
         assert kind(before="volley", depth=3.0) == "volley"

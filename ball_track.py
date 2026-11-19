@@ -63,6 +63,9 @@ class BallSettings:
                                   # Off: on the PadelTracker100 check clips only ~3% of frames have a
                                   # second candidate and using them made the track slightly worse.
     rally_gap_s: float = 4.0      # no ball for this long ends a ball-rally (lobs can leave the frame for 3 s)
+    pose_check: bool = True       # a player seen standing still (shot_pose.Swing.still) with the ball
+    still_min_height: float = 0.9  # ...at or above this share of their box did not hit it: the ball
+                                  # only passed above them in the image
 
 
 @dataclass
@@ -273,12 +276,15 @@ def event_between(a: Arc, b: Arc) -> tuple[float, tuple[float, float]]:
 
 
 def players_near(frame: int, boxes: dict[int, list[tuple[str, tuple[float, float, float, float]]]],
-                 p: tuple[float, float], s: BallSettings) -> tuple[str | None, float]:
+                 p: tuple[float, float], s: BallSettings, skip=()) -> tuple[str | None, float]:
     """Closest player whose reach (expanded box) contains p, and the ball's
-    height within that player's box (0 = feet, 1 = head)."""
+    height within that player's box (0 = feet, 1 = head). Players in skip
+    are passed over."""
     best, best_d, best_rel = None, None, 0.0
     for df in (0, -1, 1, -2, 2):
         for name, (x1, y1, x2, y2) in boxes.get(frame + df, []):
+            if name in skip:
+                continue
             w, h = x2 - x1, y2 - y1
             if (x1 - s.hit_reach_w * w <= p[0] <= x2 + s.hit_reach_w * w
                     and y1 - s.hit_reach_up * h <= p[1] <= y2 + 0.3 * h):
@@ -301,6 +307,7 @@ def analyse_ball(
     frame_span: tuple[int, int],
     s: BallSettings | None = None,
     candidates: dict[int, list[tuple[float, float]]] | None = None,
+    swing=None,
 ) -> BallResult:
     """Run the whole ball pipeline.
 
@@ -312,6 +319,9 @@ def analyse_ball(
     player_pos:   (frame, player) -> floor position in metres
     teams:        player -> team
     H:            pixel -> court-metres homography (floor)
+    swing:        (player, frame) -> shot_pose.Swing or None (optional): what the
+                  player's body did around that frame, used to drop "hits" by
+                  players who were standing still (see s.pose_check)
     """
     s = s or BallSettings()
     n_frames = max(1, frame_span[1] - frame_span[0] + 1)
@@ -365,6 +375,13 @@ def analyse_ball(
         if np.hypot(du, dv) < s.min_change and b.t0 - a.t1 <= 2:
             continue  # the curve just needed two pieces; nothing hit the ball
         hitter, rel = players_near(fi, player_boxes, p, s)
+        # The ball above a player who is standing still was not hit by them:
+        # it is passing on the far side of them. Try whoever else is in reach.
+        passed: set[str] = set()
+        while (hitter and swing is not None and s.pose_check and rel >= s.still_min_height
+               and (sw := swing(hitter, f)) is not None and sw.still):
+            passed.add(hitter)
+            hitter, rel = players_near(fi, player_boxes, p, s, passed)
         court = to_floor(H, p)
         on_floor = court is not None and -0.5 <= court[0] <= 10.5 and -0.5 <= court[1] <= 20.5
         # Gravity always pulls the image track downwards (+v). A floor bounce
@@ -508,9 +525,17 @@ def run_on_tracking(tracking, fps: float, s: BallSettings | None = None) -> Ball
         if pf.position is not None:
             pos[(pf.frame_id, pf.player_id)] = (pf.position.x, pf.position.y)
     frames = [bf.frame_id for bf in tracking.ball_frames]
+    s = s or BallSettings()
+    swing = None
+    if s.pose_check:
+        from shot_pose import PoseTracks
+
+        pose = PoseTracks(tracking)
+        swing = lambda player, frame: pose.swing(player, frame, fps)  # noqa: E731
     return analyse_ball(
         ball_px, boxes, pos, dict(zip(SLOT_NAMES, SLOT_TEAMS)),
         np.array(cal.homography_matrix, dtype=np.float64), fps,
         float(cal.frame_height), (min(frames), max(frames)), s,
         candidates={f: c for f, c in cands.items() if c},
+        swing=swing,
     )

@@ -486,7 +486,8 @@ def write_ball_csv(out: Path, ball) -> None:
 
 def write_shots_csv(out: Path, shots: list[dict]) -> None:
     cols = ["time_s", "rally", "player", "team", "type", "speed_kmh", "speed_source", "contact_height_m",
-            "depth_m", "zone", "before", "direction", "target", "apex_m", "air_time_s", "wall_after", "attacking"]
+            "depth_m", "zone", "before", "direction", "target", "apex_m", "air_time_s", "wall_after", "attacking",
+            "overhead", "confidence"]
 
     def pair(p) -> list[str]:
         return ["", ""] if not p else [f"{p[0]:.2f}", f"{p[1]:.2f}"]

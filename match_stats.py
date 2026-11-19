@@ -4,7 +4,8 @@ high, where it went and at whom, and how each rally ended.
 
 Works on what the earlier steps already produce:
 
-    stable tracking (stable_ids.py)  who is where, and their boxes in the image
+    stable tracking (stable_ids.py)  who is where, their boxes in the image and
+                                     their pose keypoints
     ball_track.py                    hits, bounces, shots, rallies (2D)
     ball3d.py (optional)             the fitted 3D flight after each hit
 
@@ -12,13 +13,14 @@ Shot types are decided by rules on a handful of measured features, not by a
 trained model:
 
     serve              first hit of a rally, from the service line, below the head
-    smash              contact above the head, fast
-    bandeja / vibora   contact above the head, not fast (the two differ in spin
-                       and swing path, which a single camera's ball track
-                       doesn't show, so they are one class here)
+    smash              an overhead, fast
+    bandeja / vibora   an overhead, not fast (the two differ in spin and swing
+                       path, which a single camera's ball track doesn't show,
+                       so they are one class here)
     bajada             off the back wall, contact high, hit hard from the back
     lob                the ball goes high (apex or time in the air), or the
-                       opponents answer it with an overhead
+                       opponents answer it with an overhead a second or more
+                       later
     volley             taken before the bounce, near the net
     chiquita           soft and short from the back or the transition zone
     drive              any other shot played after the bounce
@@ -30,14 +32,25 @@ in between as "other".
 
 Every threshold is in ShotRules. The features and their sources:
 
+    overhead         the hitter's pose around the hit (shot_pose.py): an arm
+                     above the shoulder is an overhead, a body seen throughout
+                     with no arm up is not. Only when the pose can't say
+                     (no keypoints for that player then) does the ball decide:
+                     at or above the top of the hitter's box.
     contact height   where the ball is within the hitter's box in the image
                      (feet = 0, top of the head = 1) x the player's height.
                      Ball and hitter are at the same distance from the camera
-                     at contact, so this needs no 3D fit.
+                     at contact, so this needs no 3D fit. The hit is often
+                     found a few frames late, with the ball already elsewhere
+                     in the box, so the pose's overhead / not overhead bounds it.
     speed            launch speed of the fitted 3D flight when the fit is good,
                      else the average horizontal speed from hitter to landing
     apex             highest point of the fitted 3D flight (good fits only)
     before the hit   floor / wall bounces ball_track found since the last hit
+
+Each shot also says how much of that was seen (confidence): "high" when the
+pose settled overhead or not, the bounce before the hit was seen and the 3D
+flight fits; one missing is "medium"; less, or type "other", is "low".
 
 Units: metres, seconds, km/h. Court: x 0..10 across, y 0..20 along, net at y = 10.
 """
@@ -48,6 +61,8 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 
 import numpy as np
+
+from shot_pose import PoseTracks
 
 NET_Y = 10.0
 SERVICE_LINE = 6.95          # metres from the net
@@ -67,13 +82,15 @@ class ShotRules:
     serve_depth: tuple[float, float] = (6.0, 8.5)   # server's distance from the net
     serve_max_height: float = 0.8      # contact below this share of the hitter's box
     serve_min_time: float = 1.5        # a first hit sooner after the video starts is mid-rally
-    overhead_height: float = 1.0       # contact at or above the top of the hitter's box
+    overhead_height: float = 1.0       # no pose: contact at or above the top of the hitter's box
+    not_overhead_height: float = 0.95  # pose says not an overhead: contact no higher than this
     smash_speed: float = 85.0          # km/h, overheads at least this fast
     bajada_height: float = 0.75
     bajada_depth: float = 5.0
     bajada_speed: float = 50.0
     lob_apex: float = 4.0              # metres
     lob_air_time: float = 1.7          # seconds from hit to the first floor bounce
+    lob_answer_time: float = 1.0       # an overhead answer sooner than this was not to a lob
     volley_depth: float = 6.5          # volleys are played inside this distance from the net
     unseen_volley_depth: float = 4.5   # bounce before the hit unknown: closer than this = volley...
     unseen_drive_depth: float = 5.5    # ...farther than this = drive
@@ -108,6 +125,8 @@ class ShotInfo:
     target: str | None                 # the opponent who played the ball next
     wall_after: bool
     attacking: bool
+    overhead: bool = False             # an arm above the shoulder (pose), else the ball above the head
+    confidence: str = "low"            # "high", "medium", "low": how much of the shot was seen
 
 
 def _depth(pos) -> float | None:
@@ -118,6 +137,13 @@ def classify(f: dict, r: ShotRules) -> str:
     """Shot type from the features of one hit (see the module docstring)."""
     h, speed, depth = f.get("height_rel"), f.get("speed_kmh"), f.get("depth")
     before = f.get("before")
+    overhead, apex = f.get("overhead"), f.get("apex")
+    if overhead is None:
+        overhead = h is not None and h >= r.overhead_height
+    if overhead and not f.get("overhead_by_pose") and apex is not None and apex >= r.lob_apex:
+        # Nothing hit from above the head climbs like a lob. With no pose to
+        # say otherwise, this was a low ball found late, already on its way up.
+        overhead = False
     if (f.get("first_in_rally") and depth is not None and r.serve_depth[0] <= depth <= r.serve_depth[1]
             and (h is None or h < r.serve_max_height) and f.get("time_s", 0.0) >= r.serve_min_time
             and before in (None, "serve")):
@@ -125,11 +151,11 @@ def classify(f: dict, r: ShotRules) -> str:
     if (before == "wall" and h is not None and h >= r.bajada_height and depth is not None
             and depth >= r.bajada_depth and speed is not None and speed >= r.bajada_speed):
         return "bajada"
-    if h is not None and h >= r.overhead_height:
+    if overhead:
         if speed is not None and speed >= r.smash_speed:
             return "smash"
         return "bandeja_vibora"
-    apex, air = f.get("apex"), f.get("air_time")
+    air = f.get("air_time")
     if ((apex is not None and apex >= r.lob_apex) or (air is not None and air >= r.lob_air_time)
             or f.get("answered_overhead")):
         return "lob"
@@ -149,6 +175,14 @@ def classify(f: dict, r: ShotRules) -> str:
     return "other"
 
 
+def _confidence(kind: str, before, by_pose: bool, good3d: bool) -> str:
+    """How much of a shot was seen: the pose settled overhead or not, the
+    bounce before the hit was seen, the 3D flight fits."""
+    if kind == "other":
+        return "low"
+    return ("low", "low", "medium", "high")[(before is not None) + by_pose + good3d]
+
+
 def _direction(contact, landing, r: ShotRules) -> str | None:
     """Cross-court, down the line, or down the middle, from where the hitter
     stood and where the ball went."""
@@ -164,7 +198,7 @@ def build_shots(ball, stable, teams: dict[str, str], ball3d=None, fps: float = 2
     """One ShotInfo per shot of ball_track's result.
 
     ball:   ball_track.BallResult
-    stable: tracking with stable player IDs (for the hitters' boxes)
+    stable: tracking with stable player IDs (for the hitters' boxes and poses)
     ball3d: ball3d.Ball3DResult or None
     """
     r = rules or ShotRules()
@@ -198,6 +232,20 @@ def build_shots(ball, stable, teams: dict[str, str], ball3d=None, fps: float = 2
         return float((b.y2 - hit.px[1]) / (b.y2 - b.y1))
 
     heights = [height_in_box(hit, sh.player) for sh, hit in zip(ball.shots, hits)]
+    pose = PoseTracks(stable)
+    swings = [pose.swing(sh.player, hit.frame, fps) for sh, hit in zip(ball.shots, hits)]
+    # Overhead or not: the body's word where it has one, else the ball's place in the box.
+    by_pose = [sw is not None and sw.overhead is not None for sw in swings]
+    overheads = [bool(sw.overhead) if seen else (h is not None and h >= r.overhead_height)
+                 for sw, seen, h in zip(swings, by_pose, heights)]
+    fits = [flight_for(sh.time_s, sh.player) for sh in ball.shots]
+    for i, (h, fl) in enumerate(zip(heights, fits)):
+        if overheads[i] and not by_pose[i] and fl is not None and fl.ok and fl.max_height >= r.lob_apex:
+            # Nothing hit from above the head climbs like a lob. With no pose
+            # to say otherwise, this was a low ball found late, on its way up.
+            overheads[i] = False
+        if h is not None and by_pose[i]:
+            heights[i] = max(h, r.overhead_height) if overheads[i] else min(h, r.not_overhead_height)
 
     out: list[ShotInfo] = []
     for i, (sh, hit) in enumerate(zip(ball.shots, hits)):
@@ -206,7 +254,7 @@ def build_shots(ball, stable, teams: dict[str, str], ball3d=None, fps: float = 2
         height_rel = heights[i]
         answered_overhead = (
             nxt is not None and teams.get(nxt.player) != teams.get(sh.player)
-            and heights[i + 1] is not None and heights[i + 1] >= r.overhead_height
+            and overheads[i + 1] and nxt.time_s - sh.time_s >= r.lob_answer_time
         )
 
         # what the ball did between the previous hit and this one
@@ -221,7 +269,7 @@ def build_shots(ball, stable, teams: dict[str, str], ball3d=None, fps: float = 2
             else:
                 before = None
 
-        fl = flight_for(sh.time_s, sh.player)
+        fl = fits[i]
         good3d = fl is not None and fl.ok
         speed, speed_src = None, None
         if good3d:
@@ -247,6 +295,7 @@ def build_shots(ball, stable, teams: dict[str, str], ball3d=None, fps: float = 2
 
         kind = classify({
             "first_in_rally": prev is None, "time_s": sh.time_s, "height_rel": height_rel,
+            "overhead": overheads[i], "overhead_by_pose": by_pose[i],
             "speed_kmh": speed, "depth": depth, "before": before, "apex": apex,
             "air_time": sh.flight_s, "landing_depth": _depth(landing),
             "answered_overhead": answered_overhead,
@@ -262,7 +311,8 @@ def build_shots(ball, stable, teams: dict[str, str], ball3d=None, fps: float = 2
             landing=landing, landing_source=landing_src, apex_m=None if apex is None else round(apex, 2),
             air_time_s=None if sh.flight_s is None else round(float(sh.flight_s), 2), before=before,
             direction=_direction(contact, aim, r), target=target, wall_after=bool(sh.wall_after),
-            attacking=kind in ATTACKING,
+            attacking=kind in ATTACKING, overhead=overheads[i],
+            confidence=_confidence(kind, before, by_pose[i], good3d),
         ))
     return out
 

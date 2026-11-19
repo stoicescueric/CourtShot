@@ -520,14 +520,15 @@ function shots() {
     h("h2", { style: "margin-top:20px" }, "Contact height"), h("p", { class: "sub" }, "How high the ball was when each shot was hit, by time. Above 1.75 m is over the head."),
     heightStrip(sel)));
   grid.append(card("", "All shots", `${sel.length} shots`, h("div", { class: "scroll" }, h("table", {},
-    h("thead", {}, h("tr", {}, ["#", "Time", "Player", "Type", "Speed", "Contact", "From", "Direction", "To", "Landing"].map((c, i) => h("th", { class: i === 2 || i === 3 || i > 5 ? "l" : "" }, c)))),
+    h("thead", {}, h("tr", {}, ["#", "Time", "Player", "Type", "Speed", "Contact", "From", "Direction", "To", "Landing", "Seen"].map((c, i) => h("th", { class: i === 2 || i === 3 || i > 5 ? "l" : "" }, c)))),
     h("tbody", {}, sel.map(s => h("tr", {},
       h("td", {}, String(s.index + 1)), h("td", {}, clock(s.time_s - D.t0)), h("td", { class: "l" }, who(s.player)), h("td", { class: "l" }, label(s.type)),
       h("td", {}, has(s.speed_kmh) ? Math.round(s.speed_kmh) + " km/h" : "–"), h("td", {}, num(s.contact_height_m, 1, " m")),
       h("td", { class: "l" }, s.zone ? ({ net: "Net", middle: "Mid-court", back: "Back" })[s.zone] : "–"),
       h("td", { class: "l" }, s.direction ? ({ cross: "Cross-court", line: "Down the line", middle: "Middle" })[s.direction] : "–"),
       h("td", { class: "l" }, s.target ? who(s.target) : "–"),
-      h("td", { class: "l" }, s.landing ? `${s.landing[0].toFixed(1)}, ${s.landing[1].toFixed(1)}` : "–"))))))));
+      h("td", { class: "l" }, s.landing ? `${s.landing[0].toFixed(1)}, ${s.landing[1].toFixed(1)}` : "–"),
+      h("td", { class: "l" }, ({ high: "Well", medium: "Partly", low: "Poorly" })[s.confidence] || "–"))))))));
 }
 function shotMap(list) {
   // Court drawn upright: T_1's end (near the camera, y = 0) at the bottom.
