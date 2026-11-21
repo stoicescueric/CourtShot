@@ -1,0 +1,34 @@
+# systemd unit for the CourtShot server. Copy to /etc/systemd/system/courtshot.service.
+#
+# Exactly one process (design 8.6): the lease sweep, the cleanup sweep and the sign-in
+# throttle live inside it. Never raise --workers, and never run a second copy next to it.
+#
+# --no-proxy-headers: uvicorn rewrites the client address from X-Forwarded-For by default.
+# The app does that itself, from the right-most entry and only when the peer is
+# COURTSHOT_TRUSTED_PROXY, so uvicorn must leave the headers alone.
+
+[Unit]
+Description=CourtShot server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=courtshot
+Group=courtshot
+WorkingDirectory=/opt/courtshot/server
+EnvironmentFile=/etc/courtshot/server.env
+ExecStart=/opt/courtshot/server/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers
+Restart=on-failure
+RestartSec=5
+# Stop the old process completely before a new one starts (no overlap during a deploy).
+KillMode=mixed
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/courtshot
+
+[Install]
+WantedBy=multi-user.target
