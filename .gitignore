@@ -230,3 +230,5 @@ logs/
 cache/
 cache_own_*/
 ckpts/
+
+/.courtshot-data/
