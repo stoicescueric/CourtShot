@@ -51,6 +51,30 @@ COCO_KEYPOINT_NAMES = (
 )
 
 
+@dataclass(frozen=True)
+class PeoplePreset:
+    """Which person detector runs, at what input size, and where pose comes from."""
+
+    detector: str  # weight file name (courtshot.weights)
+    imgsz: int
+    pose_closeups_only: bool  # pose from close-ups of the detected people only, no full-frame pose pass
+
+    def key(self) -> str:
+        return f"{self.detector}@{self.imgsz}"
+
+
+# accurate: a medium detector and a full-frame pose pass at 1280 px, two
+#           ~80 ms passes per frame on an M5 GPU.
+# fast:     a nano detector at 960 px (~10 ms) and pose on a crop around each
+#           person (~30 ms for four). On the check clip the nano detector
+#           found 98.5% of the players the medium one did; the full-frame
+#           pose pass is the part that finds far players worst anyway.
+PEOPLE_PRESETS: dict[str, PeoplePreset] = {
+    "accurate": PeoplePreset("yolo26m.pt", 1280, pose_closeups_only=False),
+    "fast": PeoplePreset("yolo26n.pt", 960, pose_closeups_only=True),
+}
+
+
 @dataclass
 class RawDetection:
     """One person found in a frame."""
@@ -78,10 +102,10 @@ class YoloPersonTracker:
         imgsz: int = 1280,
         tracker: str | None = None,
     ) -> None:
-        if model_path is None:
+        if model_path is None or not Path(model_path).exists():
             from courtshot.weights import get_weight_path
 
-            model_path = str(get_weight_path("yolo26m.pt"))
+            model_path = str(get_weight_path(model_path or "yolo26m.pt"))
         self.model_path = model_path
         self.device = device
         self.half = use_half_precision(device)

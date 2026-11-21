@@ -47,6 +47,8 @@ class TestTrackingCacheKey:
             model.write_bytes(b"weights")
         kwargs.setdefault("calibration", _calibration())
         kwargs.setdefault("ball_model_path", model)
+        kwargs.setdefault("ball_detector", "tracknet")
+        kwargs.setdefault("people", "accurate")
         return CourtShot(video, **kwargs)
 
     def _save_cache(self, p: CourtShot) -> None:
@@ -66,6 +68,27 @@ class TestTrackingCacheKey:
         assert self._courtshot(tmp_path, ball_model_path=other_model).tracking_key() != base
         assert self._courtshot(tmp_path, enable_pose=False).tracking_key() != base
         assert self._courtshot(tmp_path, max_players=4).tracking_key() != base
+        assert self._courtshot(tmp_path, ball_detector="classical").tracking_key() != base
+        assert self._courtshot(tmp_path, people="fast").tracking_key() != base
+
+    def test_cache_from_before_the_people_presets_counts_as_accurate(self, tmp_path):
+        import json
+
+        p = self._courtshot(tmp_path)
+        self._save_cache(p)
+        key_file = tracking_cache.key_path_for(p.cache_path)
+        old = json.loads(key_file.read_text())
+        del old["people"]
+        key_file.write_text(json.dumps(old))
+        assert tracking_cache.stale_reason(p.cache_path, p.tracking_key()) is None
+        fast = self._courtshot(tmp_path, people="fast")
+        assert "people" in tracking_cache.stale_reason(p.cache_path, fast.tracking_key())
+
+    def test_classical_detector_needs_no_model(self, tmp_path):
+        p = self._courtshot(tmp_path, ball_detector="classical", ball_model_path=tmp_path / "nope.pt")
+        assert p.ball_model_path is None
+        assert p.tracking_key()["ball_model"] == "classical"
+        assert p.tracking_key()["use_tracknet_v3"] is False
 
     def test_key_changes_with_pose_mode(self, tmp_path, monkeypatch):
         base = self._courtshot(tmp_path).tracking_key()
@@ -106,7 +129,9 @@ class TestTrackingCacheKey:
         with pytest.raises(ValueError, match="calibrat"):
             CourtShot(video, ball_model_path=video)  # no clip_calibration.json next to it
         with pytest.raises(FileNotFoundError, match="Ball model"):
-            CourtShot(video, calibration=_calibration(), ball_model_path=tmp_path / "nope.pt")
+            CourtShot(video, calibration=_calibration(), ball_model_path=tmp_path / "nope.pt", ball_detector="tracknet")
+        with pytest.raises(ValueError, match="ball detector"):
+            CourtShot(video, calibration=_calibration(), ball_detector="magic")
 
 
 class TestOlderCaches:

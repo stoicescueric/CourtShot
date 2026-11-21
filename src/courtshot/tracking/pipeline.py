@@ -17,8 +17,9 @@ import numpy as np
 
 from courtshot.schemas.tracking import BallFrame, CourtCalibration, PlayerFrame
 from courtshot.tracking.ball import BallDetector
+from courtshot.tracking.ball_classical import ClassicalBallDetector
 from courtshot.tracking.device import detect_device, use_threads
-from courtshot.tracking.player import PlayerDetector, YoloPersonTracker, YoloPoseEstimator
+from courtshot.tracking.player import PEOPLE_PRESETS, PlayerDetector, YoloPersonTracker, YoloPoseEstimator
 
 logger = logging.getLogger(__name__)
 
@@ -36,31 +37,44 @@ class TrackingPipeline:
     """Runs the player and ball detectors over a video.
 
     Without a calibration the players have no court position (and nobody is
-    filtered out for standing outside the court).
+    filtered out for standing outside the court). Without a ball model the
+    ball is found by the classical detector (no network).
     """
 
     def __init__(
         self,
         video_path: str | Path,
-        ball_model_path: str | Path,
+        ball_model_path: str | Path | None = None,
         calibration: CourtCalibration | None = None,
         enable_pose: bool = True,
         max_players: int = 4,
         device: str | None = None,
+        people: str = "fast",
         player_detector: PlayerDetector | None = None,
-        ball_detector: BallDetector | None = None,
+        ball_detector: BallDetector | ClassicalBallDetector | None = None,
     ) -> None:
         self.video_path = Path(video_path)
         self.calibration = calibration
         self.device = device or detect_device()
         logger.info("Inference device: %s", self.device)
 
-        self.player_detector = player_detector or PlayerDetector(
-            tracker=YoloPersonTracker(device=self.device),
-            pose=YoloPoseEstimator(device=self.device) if enable_pose else None,
-            max_players=max_players,
-        )
-        self.ball_detector = ball_detector or BallDetector(str(ball_model_path), device=self.device)
+        if player_detector is None:
+            preset = PEOPLE_PRESETS[people]
+            player_detector = PlayerDetector(
+                tracker=YoloPersonTracker(model_path=preset.detector, device=self.device, imgsz=preset.imgsz),
+                pose=YoloPoseEstimator(device=self.device) if enable_pose else None,
+                max_players=max_players,
+                # $COURTSHOT_POSE_CLOSEUPS=1 still turns close-ups on for "accurate"
+                pose_closeups_only=True if preset.pose_closeups_only else None,
+            )
+        self.player_detector = player_detector
+        if ball_detector is None:
+            ball_detector = (
+                BallDetector(str(ball_model_path), device=self.device)
+                if ball_model_path is not None
+                else ClassicalBallDetector()
+            )
+        self.ball_detector = ball_detector
 
     def run(
         self,
@@ -84,17 +98,24 @@ class TrackingPipeline:
             # A fixed camera has a stable background: give the ball model the
             # median of frames spread over the video instead of letting it use
             # the first frame (which has players and maybe the ball in it).
-            background = self._median_background(reader, start_frame, end_frame)
-            if background is not None:
-                self.ball_detector.set_background(background)
+            # (The classical detector needs none.)
+            if isinstance(self.ball_detector, BallDetector):
+                background = self._median_background(reader, start_frame, end_frame)
+                if background is not None:
+                    self.ball_detector.set_background(background)
 
-            # The ball and the players are independent, so the ball model runs
+            # TrackNet and the players are independent, so the ball model runs
             # on a worker thread while the main thread handles the players.
             # Each frame's ball result is collected before the next frame
             # starts, so the output is the same as running them in turn.
+            # The classical detector takes a few ms and uses the player boxes,
+            # so it runs after the players, on the main thread.
+            classical = isinstance(self.ball_detector, ClassicalBallDetector)
             processed = 0
             ball_pool = (
-                ThreadPoolExecutor(max_workers=1, thread_name_prefix="courtshot-ball") if use_threads() else None
+                ThreadPoolExecutor(max_workers=1, thread_name_prefix="courtshot-ball")
+                if use_threads() and not classical
+                else None
             )
             try:
                 for frame_id, timestamp_ms, frame in reader.frames(
@@ -116,6 +137,10 @@ class TrackingPipeline:
 
                     if ball_future is not None:
                         ball_frames.extend(ball_future.result())
+                    elif classical:
+                        ball_frames.extend(
+                            self.ball_detector.update(frame, frame_id, timestamp_ms, players=[p.bbox for p in players])
+                        )
                     else:
                         ball_frames.extend(self.ball_detector.update(frame, frame_id, timestamp_ms))
 

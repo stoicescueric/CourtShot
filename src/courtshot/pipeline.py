@@ -31,10 +31,12 @@ from courtshot.analysis.match import MatchAnalysis, analyse_cache, fit_path
 from courtshot.schemas.tracking import CourtCalibration
 from courtshot.tracking import cache as tracking_cache
 from courtshot.tracking.pipeline import TrackingPipeline, TrackingResult
+from courtshot.tracking.player import PEOPLE_PRESETS
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_BALL_MODEL = Path("checkpoints/padel_tracknetv3.pt")
+BALL_DETECTORS = ("classical", "tracknet")
 # People kept per frame before the identity step picks the four players. More
 # than 4 on purpose: an umpire or a reflection can score higher than a far
 # player, and the identity step is the better judge of who is playing.
@@ -63,7 +65,12 @@ class CourtShot:
     video_path:       the match video (fixed camera)
     calibration:      a CourtCalibration, the path of a calibration JSON, or
                       None for <video>_calibration.json next to the video
-    ball_model_path:  TrackNetV3 weights (default: checkpoints/padel_tracknetv3.pt)
+    ball_detector:    "classical" (frame differencing on the CPU, no model;
+                      the default) or "tracknet" (the TrackNetV3 network)
+    ball_model_path:  TrackNetV3 weights, for ball_detector="tracknet"
+                      (default: checkpoints/padel_tracknetv3.pt)
+    people:           "fast" (nano person detector, pose on close-ups) or
+                      "accurate" (medium detector, full-frame pose pass)
     enable_pose:      run pose estimation (needed to tell overheads and to
                       rule out hits by players who stood still)
     cache_tracking:   save / reuse the tracking next to the video
@@ -77,6 +84,8 @@ class CourtShot:
         video_path: str | Path,
         calibration: CourtCalibration | str | Path | None = None,
         ball_model_path: str | Path | None = None,
+        ball_detector: str = "classical",
+        people: str = "fast",
         enable_pose: bool = True,
         cache_tracking: bool = True,
         cache_dir: str | Path | None = None,
@@ -86,9 +95,17 @@ class CourtShot:
         self.video_path = Path(video_path)
         if not self.video_path.exists():
             raise FileNotFoundError(f"Video not found: {self.video_path}")
-        self.ball_model_path = Path(ball_model_path or DEFAULT_BALL_MODEL)
-        if not self.ball_model_path.exists():
-            raise FileNotFoundError(f"Ball model not found: {self.ball_model_path}")
+        if ball_detector not in BALL_DETECTORS:
+            raise ValueError(f"Unknown ball detector {ball_detector!r}; use one of {', '.join(BALL_DETECTORS)}")
+        self.ball_detector = ball_detector
+        if people not in PEOPLE_PRESETS:
+            raise ValueError(f"Unknown people preset {people!r}; use one of {', '.join(PEOPLE_PRESETS)}")
+        self.people = people
+        self.ball_model_path: Path | None = None
+        if ball_detector == "tracknet":
+            self.ball_model_path = Path(ball_model_path or DEFAULT_BALL_MODEL)
+            if not self.ball_model_path.exists():
+                raise FileNotFoundError(f"Ball model not found: {self.ball_model_path}")
         self.calibration = load_calibration(self.video_path, calibration)
         self.enable_pose = enable_pose
         self.cache_tracking = cache_tracking
@@ -102,8 +119,8 @@ class CourtShot:
     def tracking_key(self) -> dict[str, object]:
         """What the cached tracking of this video depends on."""
         return tracking_cache.tracking_key(
-            self.video_path, self.calibration, self.ball_model_path, self.enable_pose, self.max_players
-        )
+            self.video_path, self.calibration, self.ball_model_path, self.enable_pose, self.max_players, self.people
+        )  # no ball model = the classical detector
 
     def track(self) -> TrackingResult:
         """Raw tracking of the video: from the cache when it can be reused,
@@ -129,6 +146,7 @@ class CourtShot:
             calibration=self.calibration,
             enable_pose=self.enable_pose,
             max_players=self.max_players,
+            people=self.people,
         ).run()
         logger.info(
             "Tracking done: %d player frames, %d ball frames", len(tracking.player_frames), len(tracking.ball_frames)

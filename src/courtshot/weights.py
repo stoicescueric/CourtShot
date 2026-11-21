@@ -17,10 +17,14 @@ logger = logging.getLogger(__name__)
 WEIGHTS_DIR = Path.home() / ".courtshot" / "weights"
 
 GITHUB_RELEASE_BASE = "https://github.com/rondo-labs/Padex/releases/download/v0.1.0"
+ULTRALYTICS_RELEASE_BASE = "https://github.com/ultralytics/assets/releases/download/v8.4.0"
 
 WEIGHT_REGISTRY: dict[str, str] = {
     "yolo26m.pt": f"{GITHUB_RELEASE_BASE}/yolo26m.pt",
     "yolo26m-pose.pt": f"{GITHUB_RELEASE_BASE}/yolo26m-pose.pt",
+    # the small person detectors of the "fast" people preset, from Ultralytics' own releases
+    "yolo26n.pt": f"{ULTRALYTICS_RELEASE_BASE}/yolo26n.pt",
+    "yolo26s.pt": f"{ULTRALYTICS_RELEASE_BASE}/yolo26s.pt",
 }
 
 

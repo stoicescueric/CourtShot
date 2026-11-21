@@ -47,6 +47,8 @@ def cmd_run(args: argparse.Namespace) -> None:
             _existing(args.video, "Video"),
             calibration=args.calibration,
             ball_model_path=args.ball_model,
+            ball_detector=args.ball,
+            people=args.people,
             cache_tracking=not args.no_cache,
         )
     except (FileNotFoundError, ValueError) as exc:
@@ -124,7 +126,22 @@ def main() -> None:
         help="court calibration JSON (default: <video>_calibration.json next to the video)",
     )
     p.add_argument(
-        "--ball-model", type=Path, default=None, help="TrackNetV3 weights (default: checkpoints/padel_tracknetv3.pt)"
+        "--ball",
+        choices=("classical", "tracknet"),
+        default="classical",
+        help="ball detector: classical (frame differencing on the CPU, no model; default) or tracknet (TrackNetV3)",
+    )
+    p.add_argument(
+        "--people",
+        choices=("fast", "accurate"),
+        default="fast",
+        help="people and pose: fast (nano detector, pose on close-ups) or accurate (medium detector, full-frame pose)",
+    )
+    p.add_argument(
+        "--ball-model",
+        type=Path,
+        default=None,
+        help="TrackNetV3 weights, with --ball tracknet (default: checkpoints/padel_tracknetv3.pt)",
     )
     p.add_argument("-o", "--out", type=Path, default=None, help="output folder (default: output/<video name>/)")
     p.add_argument("--no-cache", action="store_true", help="neither reuse nor save the tracking")

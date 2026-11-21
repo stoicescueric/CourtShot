@@ -84,9 +84,13 @@ def tracking_key(
     ball_model: str | Path | None,
     enable_pose: bool,
     max_players: int | None,
+    people: str = "accurate",
 ) -> dict[str, object]:
     """Everything the cached tracking depends on."""
     from courtshot.tracking.device import use_pose_closeups_only
+    from courtshot.tracking.player import PEOPLE_PRESETS
+
+    preset = PEOPLE_PRESETS[people]
 
     def file_id(path: str | Path | None) -> str | None:
         if path is None:
@@ -98,12 +102,14 @@ def tracking_key(
     return {
         "video": file_id(video),
         "calibration_sha1": hashlib.sha1(cal.encode()).hexdigest(),
-        "ball_model": file_id(ball_model),
-        "use_tracknet_v3": True,  # the only ball model now; kept so older caches still match
+        # no ball model: the classical (frame difference) detector
+        "ball_model": file_id(ball_model) if ball_model is not None else "classical",
+        "use_tracknet_v3": ball_model is not None,  # caches from before the classical detector say True
         "enable_pose": enable_pose,
         "tracker": os.environ.get("COURTSHOT_TRACKER", "courtshot_bytetrack.yaml"),
         "max_players": max_players,
-        "pose_closeups_only": bool(enable_pose and use_pose_closeups_only()),
+        "pose_closeups_only": bool(enable_pose and (preset.pose_closeups_only or use_pose_closeups_only())),
+        "people": preset.key(),
     }
 
 
@@ -127,6 +133,8 @@ def stale_reason(cache: Path, key: dict[str, object]) -> str | None:
     tracker = saved.get("tracker")
     if isinstance(tracker, str) and tracker.startswith("padex_"):
         saved["tracker"] = "courtshot_" + tracker[len("padex_") :]
+    # caches from before the people presets were made with today's "accurate"
+    saved.setdefault("people", "yolo26m.pt@1280")
     changed = [k for k in key if saved.get(k) != key[k]]
     return f"changed since it was made: {', '.join(changed)}" if changed else None
 
