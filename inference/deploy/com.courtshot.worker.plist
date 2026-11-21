@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CourtShot worker as a LaunchAgent. launchd expands neither ~ nor $HOME: every path is absolute.
+  Replace /Users/lab with the account's home folder, the clone's location, the server URL and the token.
+  The file holds the worker token: chmod 600 it. See inference/README.md.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.courtshot.worker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/lab/courtshot/inference/.venv/bin/python</string>
+        <string>-m</string>
+        <string>courtshot.worker</string>
+        <string>run</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/lab/courtshot/inference</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>COURTSHOT_SERVER_URL</key>
+        <string>https://courtshot.example.org</string>
+        <key>COURTSHOT_WORKER_TOKEN</key>
+        <string>paste-the-token-from-create-worker</string>
+        <key>COURTSHOT_FFMPEG</key>
+        <string>/opt/homebrew/bin/ffmpeg</string>
+        <key>COURTSHOT_FFPROBE</key>
+        <string>/opt/homebrew/bin/ffprobe</string>
+        <key>COURTSHOT_WORK_ROOT</key>
+        <string>/Users/lab/Library/Application Support/CourtShot/work</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Restarted whenever it exits; a failed startup check is retried every ThrottleInterval seconds. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <!-- On stop the worker kills its job (up to 10 s) and reports it before exiting. -->
+    <key>ExitTimeOut</key>
+    <integer>45</integer>
+    <key>ProcessType</key>
+    <string>Standard</string>
+
+    <!-- launchd does not create the folder: mkdir -p ~/Library/Logs/CourtShot -->
+    <key>StandardOutPath</key>
+    <string>/Users/lab/Library/Logs/CourtShot/worker.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/lab/Library/Logs/CourtShot/worker.log</string>
+</dict>
+</plist>

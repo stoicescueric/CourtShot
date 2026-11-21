@@ -1,0 +1,91 @@
+"""
+The YOLO weights (people and pose): downloaded on first use and kept in
+$COURTSHOT_WEIGHTS_DIR (default ~/.courtshot/weights/). The ball model is not
+here: it ships in checkpoints/ at the repository root.
+
+Original author: Xingnan Zhu.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import urllib.request
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+DOWNLOAD_TIMEOUT_S = 60  # per network read, not for the whole file
+
+GITHUB_RELEASE_BASE = "https://github.com/rondo-labs/Padex/releases/download/v0.1.0"
+
+WEIGHT_REGISTRY: dict[str, str] = {
+    "yolo26m.pt": f"{GITHUB_RELEASE_BASE}/yolo26m.pt",
+    "yolo26m-pose.pt": f"{GITHUB_RELEASE_BASE}/yolo26m-pose.pt",
+}
+
+
+def get_weight_path(name: str) -> Path:
+    """Return local path to a weight file, downloading from GitHub if needed.
+
+    Args:
+        name: Weight filename (e.g. "yolo26m.pt").
+
+    Returns:
+        Path to the local weight file.
+
+    Raises:
+        ValueError: If the weight name is not in the registry.
+        RuntimeError: If download fails.
+    """
+    if name not in WEIGHT_REGISTRY:
+        raise ValueError(f"Unknown weight '{name}'. Available: {list(WEIGHT_REGISTRY.keys())}")
+
+    folder = weights_dir()
+    local_path = folder / name
+    if local_path.exists():
+        return local_path
+
+    url = WEIGHT_REGISTRY[name]
+    logger.info("Downloading %s from %s", name, url)
+
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp_path = local_path.with_suffix(".tmp")
+
+    try:
+        _download_with_progress(url, tmp_path)
+        shutil.move(str(tmp_path), str(local_path))
+    except Exception as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Failed to download {name}: {exc}") from exc
+
+    logger.info("Saved to %s", local_path)
+    return local_path
+
+
+def weights_dir() -> Path:
+    """$COURTSHOT_WEIGHTS_DIR, else ~/.courtshot/weights."""
+    return Path(os.environ.get("COURTSHOT_WEIGHTS_DIR") or Path.home() / ".courtshot" / "weights").expanduser()
+
+
+def _download_with_progress(url: str, dest: Path) -> None:
+    """Download a file with progress logging."""
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_S) as response:
+        total = int(response.headers.get("Content-Length", 0))
+        downloaded = 0
+        chunk_size = 1024 * 1024  # 1MB
+
+        with open(dest, "wb") as f:
+            while True:
+                chunk = response.read(chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                if total > 0:
+                    pct = downloaded / total * 100
+                    mb = downloaded / (1024 * 1024)
+                    total_mb = total / (1024 * 1024)
+                    logger.info("  %.1f / %.1f MB (%.0f%%)", mb, total_mb, pct)
