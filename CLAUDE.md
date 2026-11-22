@@ -16,12 +16,12 @@ Padel's enclosed court (glass walls + metal fences), fixed dimensions (20m × 10
 
 The sections below ("Architecture", "Data Schema", "File Structure Per Match") describe the design the project is heading for. The code that exists today is the working pipeline only; see "Package Structure" for where things are. The differences that matter:
 
-- **Layer 1** is `courtshot.tracking`: YOLO + ByteTrack for people, YOLO-Pose, and a fine-tuned TrackNetV3 for the ball. SAM3 is not used. Court calibration is interactive (`courtshot calibrate`); there is no automatic court detection. Team assignment comes from the identity step (near pair = T_1, far pair = T_2 at the seed frame), not from jersey colours.
+- **Layer 1** is `courtshot.tracking`: YOLO + ByteTrack for people (in batches; every second frame in 50/60 fps video, the frames between filled in) and a fine-tuned TrackNetV3 for the ball. Pose is not part of tracking: YOLO-Pose runs afterwards, in `courtshot.analysis.poses`, only on the frames around the ball's events, and is saved as `<video>_tracking_cache_pose.npz`. Caches made before that carry keypoints in their player frames and are used as they are. SAM3 is not used. Court calibration is interactive (`courtshot calibrate`); there is no automatic court detection. Team assignment comes from the identity step (near pair = T_1, far pair = T_2 at the seed frame), not from jersey colours.
 - **Layer 2** is `courtshot.analysis`: stable player identities, ball events (hits, floor and wall bounces) found in image space, 3D ball flights fitted with a physics model, and rule-based shot types. Bounce types are "ground" and "wall" only; bandeja and víbora are one class.
 - **Layer 3** is `courtshot.analysis.movement` and `courtshot.report`: movement and formation statistics, the HTML match report and the 3D replay.
 - **Storage**: tracking is cached as a pickle next to the video (`<video>_tracking_cache.pkl`); the videos, their calibration JSONs and caches live in `videos/`; outputs are CSV, JSON and HTML in `output/<video>/`. The Parquet / JSONL match folder of the schema document is not implemented.
 - **Running it**: `uv run python -m courtshot run <video>` (on this Windows machine the `courtshot` console script is blocked by Application Control, so use `python -m courtshot`).
-- **Verifying changes**: the report and replay are deterministic. After a refactor, `python -m courtshot report` on an existing tracking cache must give byte-identical `summary.json`, `shots.csv`, `ball_events.csv` and `positions.csv`.
+- **Verifying changes**: the report and replay are deterministic. After a refactor, `python -m courtshot report` on an existing tracking cache must give byte-identical `summary.json`, `shots.csv`, `ball_events.csv` and `positions.csv`. After a change to tracking, `python -m courtshot run --no-video` on a copy of `videos/final_f.mp4` and `videos/match.mp4` (with their calibration JSONs, in another folder) must give the same shots as the report from the caches in `videos/` (62 and 44, same players and types).
 
 ## Architecture — Three Layers
 
@@ -153,7 +153,7 @@ courtshot/
 │       ├── io/
 │       │   └── video.py       # Video reader / writer
 │       ├── tracking/          # Layer 1: video -> raw tracking (GPU)
-│       │   ├── player.py      # People (YOLO + ByteTrack) + pose
+│       │   ├── player.py      # People (YOLO + ByteTrack); the pose model
 │       │   ├── ball.py        # TrackNetV3 ball detector
 │       │   ├── pipeline.py    # Runs both over a video; TrackingResult
 │       │   ├── cache.py       # Tracking cache + its key
@@ -161,6 +161,7 @@ courtshot/
 │       ├── analysis/          # Layer 2 (+ movement metrics of Layer 3)
 │       │   ├── identities.py  # Four stable player IDs
 │       │   ├── appearance.py  # Player appearance vectors (SigLIP)
+│       │   ├── poses.py       # Pose keypoints around the ball's events
 │       │   ├── ball_events.py # Hits, floor and wall bounces (2D)
 │       │   ├── ball_flight.py # 3D ball flights (physics fit)
 │       │   ├── swing.py       # Hitter's pose around a hit

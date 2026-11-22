@@ -41,10 +41,15 @@ Results go to `output/match/`:
 
 `bash run_match.sh videos/match.mp4` does the same and keeps a log in `logs/`.
 
-Tracking is the slow step. Its result is saved next to the video as
-`videos/match_tracking_cache.pkl` and reused on later runs, as long as the video, the
-calibration, the ball model and the settings are the same. The report and the
-replay can be made again from that cache alone, without the video or a GPU:
+Tracking is the GPU step. On an RTX 4080 it runs at about 75 frames a second on
+1080p video of 25 or 30 fps and faster on 50 or 60 fps video, where the people
+detector takes every second frame (see "Speed" below). Its result is saved next
+to the video as `videos/match_tracking_cache.pkl` and reused on later runs, as
+long as the video, the calibration, the ball model and the settings are the
+same. What is made from the video afterwards (what the players look like, their
+poses around the ball's events, the 3D fit) is saved next to it too. The report
+and the replay can be made again from those files alone, without the video or a
+GPU:
 
 ```bash
 uv run python -m courtshot report videos/match_tracking_cache.pkl --out output/match
@@ -73,9 +78,10 @@ come from a 90-second test clip.
 ```mermaid
 flowchart TD
     V["<b>Video from one fixed camera</b><br/>plus a one-time court calibration"]
-    P["<b>Player detection and pose</b><br/>YOLO + ByteTrack, YOLO-Pose"]
+    P["<b>Player detection</b><br/>YOLO + ByteTrack"]
     B["<b>Ball detection</b><br/>TrackNetV3 on 8-frame windows"]
     I["<b>Stable identities P_1 to P_4</b><br/>motion assignment + SigLIP appearance"]
+    K["<b>Poses where the ball changes course</b><br/>YOLO-Pose on those frames only"]
     E["<b>Ball events</b><br/>arcs in the image: hit, floor, wall"]
     M["<b>Rallies and movement</b><br/>distance, speed, zones, formations"]
     F["<b>3D ball flight</b><br/>physics fitted to the 2D detections"]
@@ -83,9 +89,10 @@ flowchart TD
     O["<b>Tracked video, match report, 3D replay</b>"]
     V --> P --> I --> M --> O
     V --> B --> E --> F --> S --> O
-    I --> E
+    I --> K --> E
+    B --> K
     classDef net fill:#e8e8e4,stroke:#888,color:#111
-    class P,B,I net
+    class P,B,I,K net
 ```
 
 Grey boxes run a neural network on the video. Their output is cached, so the
@@ -110,9 +117,12 @@ does not, which shapes the two ball steps below.
 
 ### 2. Players: detection, pose and stable identities
 
-YOLO with ByteTrack finds the people, YOLO-Pose gives 17 body keypoints each,
-and the bottom-centre of each box (the feet) is mapped onto the court. Anyone
-more than 1 m outside the court is dropped.
+YOLO with ByteTrack finds the people, and the bottom-centre of each box (the
+feet) is mapped onto the court. Anyone more than 1 m outside the court is
+dropped. YOLO-Pose gives 17 body keypoints per player, but only where they are
+used: in the fraction of a second around each moment the ball changes course
+within a player's reach (`analysis/poses.py`). That is made after tracking,
+once the ball's path is known.
 
 ByteTrack's IDs break at every occlusion and crossing: it gave 15 different IDs
 to the four players in the test clip. The identity step
@@ -223,13 +233,14 @@ src/courtshot/
   schemas/tracking.py  PlayerFrame, BallFrame, CourtCalibration
   io/video.py          video reader and writer
   tracking/            video -> raw tracking (the GPU part)
-    player.py            people, tracker IDs, pose
+    player.py            people, tracker IDs; the pose model
     ball.py              TrackNetV3 ball detector
     pipeline.py          runs both over a video
     cache.py             the tracking cache and its key
   analysis/            raw tracking -> players, shots, statistics
     identities.py        four stable player IDs
     appearance.py        what each player looks like (SigLIP)
+    poses.py             pose keypoints around the ball's events
     ball_events.py       hits and bounces in 2D
     ball_flight.py       3D ball flights
     swing.py             what the hitter's body did (pose)
@@ -266,9 +277,28 @@ audio track (an experiment, not used by the pipeline).
 | --- | --- |
 | `COURTSHOT_TRACKER` | Player tracker config: `courtshot_bytetrack.yaml` (default) or `courtshot_botsort.yaml`, or a file of your own |
 | `COURTSHOT_FP16=0` | Full precision on the GPU (default: half precision on CUDA) |
-| `COURTSHOT_POSE_CLOSEUPS=1` | Pose from close-ups of the players only: faster, slightly worse for the near players |
-| `COURTSHOT_THREADS=0` | Run the models one after another on one thread |
+| `COURTSHOT_THREADS=0` | Run decoding and the models one after another on one thread |
 | `COURTSHOT_WORKERS` | Processes for the 3D ball fit (default: half the logical CPUs) |
+
+## Speed
+
+For a whole match, leave out the tracked video (`--no-video`): drawing and
+encoding every frame takes about as long as everything else together.
+
+- **People** are detected in batches of frames, and in video faster than 30 fps
+  in every second frame (every fourth at 120 fps). The players in the frames
+  between are placed on the line from one detection to the next.
+- **Poses** are made after tracking, for the frames around the ball's events
+  only. On the test clips this gives the same shots as a pose for every player
+  in every frame, which was more than half of the tracking time.
+- **The ball model** takes its frames in batches. `--ball-stride 2` runs it on
+  every second 8-frame window, which is faster again and finds the ball in the
+  same frames, but about one hit in ten then comes out differently, so it is
+  off by default.
+- Decoding, resizing, the ball model, the people detector and the tracker each
+  have a thread of their own.
+- **The 3D fit** uses half the logical CPUs. On a machine with more physical
+  cores than that, `COURTSHOT_WORKERS` set to their number makes it faster.
 
 ## Development
 

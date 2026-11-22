@@ -220,13 +220,21 @@ def _direction(contact, landing, r: ShotRules) -> str | None:
 
 
 def build_shots(
-    ball, stable, teams: dict[str, str], ball3d=None, fps: float = 25.0, rules: ShotRules | None = None
+    ball,
+    stable,
+    teams: dict[str, str],
+    ball3d=None,
+    fps: float = 25.0,
+    rules: ShotRules | None = None,
+    poses: PoseTracks | None = None,
 ) -> list[ShotInfo]:
     """One ShotInfo per shot of the 2D ball result.
 
     ball:   ball_events.BallResult
     stable: tracking with stable player IDs (for the hitters' boxes and poses)
     ball3d: ball_flight.Ball3DResult or None
+    poses:  the players' keypoints, if they are already at hand (otherwise
+            they are read from ``stable``)
     """
     r = rules or ShotRules()
     boxes = {(pf.frame_id, pf.player_id): pf.bbox for pf in stable.player_frames}
@@ -262,7 +270,7 @@ def build_shots(
         return float((b.y2 - hit.px[1]) / (b.y2 - b.y1))
 
     heights = [height_in_box(hit, sh.player) for sh, hit in zip(ball.shots, hits)]
-    pose = PoseTracks(stable)
+    pose = poses or PoseTracks(stable)
     swings = [pose.swing(sh.player, hit.frame, fps) for sh, hit in zip(ball.shots, hits)]
     # Overhead or not: the body's word where it has one, else the ball's place in the box.
     by_pose = [sw is not None and sw.overhead is not None for sw in swings]
@@ -478,9 +486,10 @@ def match_stats(
     fps: float = 25.0,
     video_end_s: float | None = None,
     rules: ShotRules | None = None,
+    poses: PoseTracks | None = None,
 ) -> dict:
     """Everything in one go: shots, rally endings, per-player and per-team totals."""
-    shots = build_shots(ball, stable, teams, ball3d, fps, rules)
+    shots = build_shots(ball, stable, teams, ball3d, fps, rules, poses)
     endings = rally_endings(shots, ball.rallies, ball3d, video_end_s)
     players = sorted(teams)
     team_names = sorted(set(teams.values()))

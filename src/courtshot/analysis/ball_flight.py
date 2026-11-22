@@ -170,6 +170,9 @@ ROLL_VZ = 0.6  # m/s: slower floor impacts count as rolling, not bounces
 # speed kept in a wall bounce (friction).
 
 
+_FAR_WALLS = np.array([10.0, 20.0])  # the side wall at x = 10 and the back wall at y = 20
+
+
 def simulate_batch(
     P: np.ndarray, n_steps: int, dt: float, sample_steps: np.ndarray, record: bool = False, net: bool = False
 ):
@@ -198,7 +201,7 @@ def simulate_batch(
                 out[:, i] = x
         if k == n_steps:
             break
-        sp = np.linalg.norm(v, axis=1, keepdims=True)
+        sp = np.sqrt((v * v).sum(axis=1, keepdims=True))
         v = v + (g - DRAG_K * sp * v) * dt
         y_before = x[:, 1].copy()
         x = x + v * dt
@@ -206,6 +209,9 @@ def simulate_batch(
             crossed = (y_before - NET_Y) * (x[:, 1] - NET_Y) < 0
             if crossed.any():
                 net_z[crossed] = np.minimum(net_z[crossed], x[crossed, 2])
+        # Most steps touch neither the floor nor a wall: one look settles that.
+        if not (((x < 0.0) & (v < 0)).any() or ((x[:, :2] > _FAR_WALLS) & (v[:, :2] > 0)).any()):
+            continue
         # floor
         hit = (x[:, 2] < 0) & (v[:, 2] < 0)
         if hit.any():
@@ -249,9 +255,10 @@ class Flight:
     hitter: str | None = None
     bounces: list = field(default_factory=list)  # [(kind, time_s, xyz)]
     ok: bool = True
+    substeps: int = 8  # simulation steps per video frame the flight was fitted with
 
     def _steps(self, times_s):
-        dt = 1.0 / (self.fps * 8)
+        dt = 1.0 / (self.fps * self.substeps)
         idx = np.round((np.asarray(times_s) - self.hit_time_s) / dt).astype(int)
         return idx, dt
 
@@ -285,12 +292,19 @@ class FitSettings:
     max_flight_s: float = 3.5
     outlier_px: float = 8.0  # detections this far from the 2D track are dropped
     bad_rms_px: float = 5.0  # fits worse than this are flagged not ok
-    substeps: int = 8  # simulation steps per video frame
+    substeps: int = 8  # simulation steps per video frame (fewer in fast video, see substeps_for)
     use_net: bool = True  # ball must clear the net when it crosses it in the air
     loss: str = "soft_l1"  # robust: a few wrong detections don't bend the whole flight
     n_starts: int = 6  # best starting guesses refined by the optimiser
     max_nfev: int = 120
     f_scale: float = 2.0  # residuals beyond ~2 sigma (4 px) count less
+
+
+def substeps_for(fps: float, s: FitSettings) -> int:
+    """Simulation steps per video frame. In video faster than 30 fps fewer of
+    them make the same time step (about 4 ms), and the fit costs no more per
+    second of flight than it does at 30 fps."""
+    return s.substeps if fps <= 30.5 else max(1, round(s.substeps * 30.0 / fps))
 
 
 def _residuals_batch(P, cam, px, sample_steps, n_steps, dt, s, hit_xy, end_xy, end_step):
@@ -383,7 +397,8 @@ def fit_flight(
 ) -> Flight | None:
     if len(frames) < s.min_points:
         return None
-    dt = 1.0 / (fps * s.substeps)
+    substeps = substeps_for(fps, s)
+    dt = 1.0 / (fps * substeps)
     sample_steps = np.round((frames / fps - hit_time_s) / dt).astype(int)
     sample_steps = np.clip(sample_steps, 0, None)
     end_step = int(round((end_time_s - hit_time_s) / dt)) if end_xy is not None or end_time_s else None
@@ -448,7 +463,9 @@ def fit_flight(
         height_sd = float("nan")
 
     bounces = [(k, hit_time_s + t, xyz) for k, t, xyz in events]
-    return Flight(hit_time_s, p, frames, px, rms, height_sd, end_time_s, fps, None, bounces, ok=rms <= s.bad_rms_px)
+    return Flight(
+        hit_time_s, p, frames, px, rms, height_sd, end_time_s, fps, None, bounces, rms <= s.bad_rms_px, substeps
+    )
 
 
 # ---------------------------------------------------------------------------

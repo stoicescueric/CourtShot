@@ -282,7 +282,7 @@ def write_match_report(analysis: MatchAnalysis, out: str | Path, settings: Setti
     stats = None
     if ball is not None:
         stats = shot_stats.match_stats(
-            ball, stable, dict(zip(SLOT_NAMES, SLOT_TEAMS)), ball3d, fps, video_end_s=float(t[-1])
+            ball, stable, dict(zip(SLOT_NAMES, SLOT_TEAMS)), ball3d, fps, video_end_s=float(t[-1]), poses=analysis.poses
         )
 
     out.mkdir(parents=True, exist_ok=True)

@@ -6,8 +6,8 @@ ball file (<match>_ball.json: one image per video frame, an annotation with
 a bbox when the ball is visible). This script cuts each match into clips of
 --clip-frames frames and writes, per clip:
 
-    data/ptk_<match>_<NNN>/frames/000000.jpg ...   (512x288, ready for training)
-    data/ptk_<match>_<NNN>/labels.csv              (frame,visibility,x,y in 512x288 pixels)
+    data/ptk_<match>_<NNN>/frames/000000.jpg ...   (512x288, ready for training; --size for another size)
+    data/ptk_<match>_<NNN>/labels.csv              (frame,visibility,x,y in pixels of those frames)
 
 Frames with a trusted label get a row (visibility 0 = no ball). Frames that
 can't be trusted get no row, so training skips them: frames inside long
@@ -180,7 +180,18 @@ def main() -> None:
         help="longer runs of frames without a ball label are treated as unlabelled (frames)",
     )
     ap.add_argument("--list", action="store_true", help="only list what was found")
+    ap.add_argument(
+        "--size",
+        help="size of the frames written, e.g. 1024x576 for train_tracknetv3.py --size 1024x576 "
+        "(default 512x288); use a separate --out folder per size",
+    )
     args = ap.parse_args()
+    if args.size:
+        global W, H
+        try:
+            W, H = (int(v) for v in args.size.lower().split("x"))
+        except ValueError:
+            raise SystemExit(f"--size must look like 1024x576, got {args.size!r}") from None
     matches = find_matches(args.src)
     if not matches:
         raise SystemExit(f"No <match>_ball.json + video pairs found under {args.src}")

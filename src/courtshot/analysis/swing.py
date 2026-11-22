@@ -1,6 +1,7 @@
 """
-What the hitter's body does around a hit, read from the pose keypoints the
-tracker already saved (17 COCO points per player per frame).
+What the hitter's body does around a hit, read from the players' pose
+keypoints (17 COCO points per player per frame; see courtshot.analysis.poses
+for where they come from).
 
 The ball track alone gets two things wrong often enough to matter:
 
@@ -96,14 +97,29 @@ class Swing:
     still: bool  # seen throughout, no arm up, no wrist moving: not a hitter
 
 
-class PoseTracks:
-    """Keypoints of every player by frame, from a tracking result."""
+def swing_window(frame: float, fps: float, s: PoseSettings) -> tuple[int, int]:
+    """First and last frame looked at for a hit found at ``frame``."""
+    return int(round(frame - s.before_s * fps)), int(round(frame + s.after_s * fps))
 
-    def __init__(self, tracking, settings: PoseSettings | None = None):
+
+class PoseTracks:
+    """Keypoints of every player by frame.
+
+    They come from the tracking result where its player frames carry them
+    (tracking used to make them for every frame), and otherwise from
+    ``poses``: the keypoints made after tracking for the moments that matter
+    (courtshot.analysis.poses), as {(player, frame): (xy (17, 2), confidence (17,))}.
+    """
+
+    def __init__(self, tracking, settings: PoseSettings | None = None, poses: dict | None = None):
         self.s = settings or PoseSettings()
         self.kp: dict[tuple[str, int], tuple[np.ndarray, np.ndarray, float]] = {}
+        poses = poses or {}
         for pf in tracking.player_frames:
             if not pf.keypoints:
+                made_later = poses.get((pf.player_id, pf.frame_id))
+                if made_later is not None:
+                    self.kp[(pf.player_id, pf.frame_id)] = (*made_later, float(pf.bbox.y2 - pf.bbox.y1))
                 continue
             xy = np.full((len(NAMES), 2), np.nan)
             conf = np.zeros(len(NAMES))
@@ -130,8 +146,7 @@ class PoseTracks:
 
     def swing(self, player: str, frame: float, fps: float) -> Swing | None:
         s = self.s
-        f0 = int(round(frame - s.before_s * fps))
-        f1 = int(round(frame + s.after_s * fps))
+        f0, f1 = swing_window(frame, fps, s)
         bodies = {f: b for f in range(f0, f1 + 1) if (b := self._body(player, f)) is not None}
         if len(bodies) < s.min_frames:
             return None

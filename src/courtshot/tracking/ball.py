@@ -20,6 +20,7 @@ Original author: Xingnan Zhu.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import TYPE_CHECKING
 
 import cv2
@@ -120,10 +121,16 @@ def build_tracknet_v3(in_dim: int = 9, out_dim: int = 3) -> torch.nn.Module:
 class BallDetector:
     """Streaming ball detector: feed frames in order, get BallFrames back.
 
-    Each frame is part of up to SEQ_LEN overlapping windows; its heatmap is
-    the average over all of them, so the model has seen the frames after it
-    as well as those before. Results therefore come SEQ_LEN - 1 frames late:
-    update() returns the frames that are now final, flush() the rest.
+    The model looks at windows of SEQ_LEN consecutive frames. A window is run
+    every ``stride`` frames, so each frame is part of SEQ_LEN / stride
+    overlapping windows; its heatmap is the average over all of them, and the
+    model has seen the frames after it as well as those before. Results
+    therefore come SEQ_LEN - 1 frames late: update() returns the frames that
+    are now final, flush() the rest.
+
+    stride 1 runs the model once per frame (every frame is in SEQ_LEN
+    windows). stride 2 halves the work and still shows every frame to the
+    model four times, at four different places in the window.
 
     Input:  27 channels = background frame + SEQ_LEN frames, at INFER_W x INFER_H
     Output: SEQ_LEN sigmoid heatmaps, one per frame of the window
@@ -136,16 +143,20 @@ class BallDetector:
     MAX_CANDIDATES: int = 3  # blobs kept per frame (the ball plus look-alikes)
     SEQ_LEN: int = 8
 
-    def __init__(self, model_path: str, device: str | None = None) -> None:
+    def __init__(self, model_path: str, device: str | None = None, stride: int = 1) -> None:
+        if not 1 <= stride <= self.SEQ_LEN:
+            raise ValueError(f"stride must be 1..{self.SEQ_LEN}, got {stride}")
         self.model_path = str(model_path)
+        self.stride = stride
         self._device_str = device
         self._model = None
-        self._frame_buffer: list = []  # last SEQ_LEN frames, as tensors on the device
+        self._frame_buffer = None  # the last frames as one tensor on the device, newest last
         self._bg_source: np.ndarray | None = None  # from set_background()
-        self._bg_frame: np.ndarray | None = None
         self._bg_tensor = None
-        self._windows: list[np.ndarray] = []  # model outputs of the last SEQ_LEN windows
-        self._pending: list[tuple[int, float, tuple]] = []  # (frame_id, timestamp_ms, shape) not yet returned
+        self._seen = 0  # frames pushed since the last reset
+        self._last_window = -1  # how many frames had been seen when the model last ran
+        # frames not yet returned: [frame_id, timestamp_ms, shape, sum of heatmaps, how many]
+        self._pending: deque[list] = deque()
 
     # -- public -----------------------------------------------------------
 
@@ -155,40 +166,58 @@ class BallDetector:
         It is kept across reset(). With None, the first frame seen is used.
         """
         self._bg_source = frame
-        self._bg_frame = None
         self._bg_tensor = None
+
+    def prepare(self, frame: np.ndarray) -> np.ndarray:
+        """A video frame at the size the model takes. Separate from push() so
+        that it can be done ahead of time, on another thread."""
+        self._ensure_model()
+        # INTER_AREA: the same downscaling the training frames were made with
+        return cv2.resize(frame, (self.INFER_W, self.INFER_H), interpolation=cv2.INTER_AREA)
 
     def update(self, frame: np.ndarray, frame_id: int, timestamp_ms: float) -> list[BallFrame]:
         """Push one frame; returns the frames whose result is now final (none
         or one, SEQ_LEN - 1 frames behind the input)."""
-        self._pending.append((frame_id, timestamp_ms, frame.shape))
-        heatmaps = self._forward(frame)
-        if heatmaps is None:
-            return []
-        self._windows.append(heatmaps)
-        if len(self._windows) > self.SEQ_LEN:
-            self._windows.pop(0)
-        return [self._finish_oldest(0)]
+        return self.push(self.prepare(frame), frame.shape, frame_id, timestamp_ms)
+
+    def push(self, resized: np.ndarray, shape: tuple, frame_id: int, timestamp_ms: float) -> list[BallFrame]:
+        """update() for a frame prepare() has already resized; ``shape`` is
+        the shape of the video frame it came from."""
+        return self.push_many([resized], shape, [frame_id], [timestamp_ms])
+
+    def push_many(
+        self, resized: list[np.ndarray], shape: tuple, frame_ids: list[int], timestamps_ms: list[float]
+    ) -> list[BallFrame]:
+        """push() for several consecutive frames at once. The result is the
+        same as pushing them one by one; the frames go to the GPU together,
+        their windows run as one batch and the results come back together,
+        which is a good deal faster when the GPU is shared with other work."""
+        for frame_id, timestamp_ms in zip(frame_ids, timestamps_ms):
+            self._pending.append([frame_id, timestamp_ms, shape, None, 0])
+        self._buffer(resized)
+        before, self._seen = self._seen, self._seen + len(resized)
+        ends = [
+            n for n in range(before + 1, self._seen + 1) if n >= self.SEQ_LEN and (n - self.SEQ_LEN) % self.stride == 0
+        ]
+        if ends:
+            self._run_windows(ends)
+        return self._finish(len(self._pending) - (self.SEQ_LEN - 1))
 
     def flush(self) -> list[BallFrame]:
         """The frames still waiting for later windows that will never come."""
-        out = []
-        k = 1  # position of the oldest pending frame in the newest window
-        while self._pending:
-            if self._windows and k < self.SEQ_LEN:
-                out.append(self._finish_oldest(k))
-            else:  # fewer than SEQ_LEN frames were ever seen
-                fid, ts, _ = self._pending.pop(0)
-                out.append(BallFrame(frame_id=fid, timestamp_ms=ts))
-            k += 1
-        self._windows.clear()
+        if self._pending and self._seen >= self.SEQ_LEN and self._last_window != self._seen:
+            self._run_windows([self._seen])  # with a stride, the last frames may be in no window yet
+        out = self._finish(len(self._pending))
+        self._frame_buffer = None  # whatever comes next is another run of frames
+        self._seen = 0
+        self._last_window = -1
         return out
 
     def reset(self) -> None:
-        self._frame_buffer.clear()
-        self._bg_frame = None
+        self._frame_buffer = None
         self._bg_tensor = None
-        self._windows.clear()
+        self._seen = 0
+        self._last_window = -1
         self._pending.clear()
 
     def candidates(self, heatmap: np.ndarray, orig_shape: tuple) -> list[tuple[float, float, float]]:
@@ -243,53 +272,77 @@ class BallDetector:
                 break
         model.load_state_dict(state)
         model.eval()
-        model.to(self._torch_device)
+        model.to(self._torch_device, memory_format=torch.channels_last)
+        if self._half:
+            model.half()
         self._model = model
         logger.info("TrackNetV3 loaded on %s (%dx%d)", device, self.INFER_W, self.INFER_H)
 
-    def _to_tensor(self, img: np.ndarray) -> torch.Tensor:
-        """HxWx3 uint8 image -> (3, H, W) float tensor in 0..1 on the device."""
+    def _to_tensor(self, images: np.ndarray) -> torch.Tensor:
+        """(N, H, W, 3) uint8 images -> (N, 3, H, W) float tensor in 0..1 on the device."""
         import torch
 
-        t = torch.from_numpy(np.ascontiguousarray(img.transpose(2, 0, 1)))
-        return t.to(self._torch_device).float() / 255.0
+        t = torch.from_numpy(images).to(self._torch_device).permute(0, 3, 1, 2)
+        return (t.half() if self._half else t.float()) / 255.0
 
-    def _forward(self, frame: np.ndarray) -> np.ndarray | None:
-        """Push one frame; heatmaps (SEQ_LEN, H, W) for the last SEQ_LEN frames,
-        or None until SEQ_LEN frames have been seen."""
+    def _buffer(self, resized: list[np.ndarray]) -> None:
+        """Keep resized frames for the windows they will be in. Frames stay
+        on the device, so each one is converted and uploaded once instead of
+        once per window."""
+        import torch
+
         self._ensure_model()
+        if self._bg_tensor is None:
+            background = resized[0] if self._bg_source is None else self.prepare(self._bg_source)
+            self._bg_tensor = self._to_tensor(background[None])[0]
+        new = self._to_tensor(np.stack(resized))
+        old = self._frame_buffer
+        # the frames before these that their windows reach back to
+        self._frame_buffer = new if old is None else torch.cat([old[-(self.SEQ_LEN - 1) :], new])
+
+    def _infer(self, ends: list[int]):
+        """Heatmaps (len(ends), SEQ_LEN, H, W): one window per entry of
+        ``ends``, each ending with the frame that was the ends[i]-th pushed."""
         import torch
 
-        # INTER_AREA: the same downscaling the training frames were made with
-        resized = cv2.resize(frame, (self.INFER_W, self.INFER_H), interpolation=cv2.INTER_AREA)
+        frames = self._frame_buffer
+        windows = []
+        for end in ends:
+            last = len(frames) - (self._seen - end)  # one past the window's last frame in the buffer
+            window = frames[last - self.SEQ_LEN : last].reshape(-1, *frames.shape[2:])
+            windows.append(torch.cat([self._bg_tensor, window], dim=0))
+        with torch.inference_mode():
+            out = self._model(torch.stack(windows).contiguous(memory_format=torch.channels_last))
+        return out.float()
 
-        if self._bg_frame is None:
-            if self._bg_source is not None:
-                self._bg_frame = cv2.resize(self._bg_source, (self.INFER_W, self.INFER_H), interpolation=cv2.INTER_AREA)
+    def _run_windows(self, ends: list[int]) -> None:
+        """Run the model on the windows ending at these frames and add each
+        frame's heatmap to what other windows gave for it."""
+        heatmaps = self._infer(ends)
+        self._last_window = ends[-1]
+        first_pending = self._seen - len(self._pending)  # how many frames were pushed before the oldest waiting one
+        for end, window in zip(ends, heatmaps):
+            for k in range(self.SEQ_LEN):
+                entry = self._pending[end - self.SEQ_LEN + k - first_pending]
+                entry[3] = window[k] if entry[3] is None else entry[3] + window[k]
+                entry[4] += 1
+
+    def _finish(self, count: int) -> list[BallFrame]:
+        """The ``count`` oldest waiting frames, each from the average of its heatmaps."""
+        entries = [self._pending.popleft() for _ in range(max(0, count))]
+        averaged = [total / n for _, _, _, total, n in entries if n]
+        if averaged and not isinstance(averaged[0], np.ndarray):
+            import torch
+
+            averaged = list(torch.stack(averaged).cpu().numpy())  # one trip from the GPU for all of them
+        heatmaps = iter(averaged)
+        out = []
+        for frame_id, timestamp_ms, shape, _, n in entries:
+            if n == 0:  # in no window: fewer than SEQ_LEN frames were ever seen
+                out.append(BallFrame(frame_id=frame_id, timestamp_ms=timestamp_ms))
             else:
-                self._bg_frame = resized
-
-        # Frames are kept on the device as float tensors, so each one is
-        # converted and uploaded once instead of once per window it is in.
-        if self._bg_tensor is None:
-            self._bg_tensor = self._to_tensor(self._bg_frame)
-        self._frame_buffer.append(self._to_tensor(resized))
-        if len(self._frame_buffer) > self.SEQ_LEN:
-            self._frame_buffer.pop(0)
-        if len(self._frame_buffer) < self.SEQ_LEN:
-            return None
-
-        tensor = torch.cat([self._bg_tensor] + self._frame_buffer, dim=0).unsqueeze(0)
-        with torch.inference_mode(), torch.autocast("cuda", enabled=self._half):
-            out = self._model(tensor)  # (1, SEQ_LEN, H, W)
-        return out[0].float().cpu().numpy()
-
-    def _finish_oldest(self, k: int) -> BallFrame:
-        """Average the heatmaps of the frame at position k of the newest
-        window: it is at position k + j of the window j steps older."""
-        fid, ts, shape = self._pending.pop(0)
-        maps = [self._windows[-1 - j][k + j] for j in range(len(self._windows)) if k + j < self.SEQ_LEN]
-        return self._to_ball_frame(np.mean(maps, axis=0), shape, fid, ts)
+                out.append(self._to_ball_frame(next(heatmaps), shape, frame_id, timestamp_ms))
+        return out
 
     def _to_ball_frame(self, heatmap: np.ndarray, orig_shape: tuple, frame_id: int, timestamp_ms: float) -> BallFrame:
         candidates = self.candidates(heatmap, orig_shape)

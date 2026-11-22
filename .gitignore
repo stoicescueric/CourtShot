@@ -228,5 +228,6 @@ data/
 # Run and training logs, training frame caches, downloaded base weights
 logs/
 cache/
-cache_own_*/
+cache_*/
+data_*/
 ckpts/

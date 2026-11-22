@@ -523,9 +523,15 @@ def analyse_ball(
     return BallResult(coverage, kept, arcs, events, shots, rallies, track, on_track)
 
 
-def run_on_tracking(tracking, fps: float, s: BallSettings | None = None) -> BallResult | None:
+def run_on_tracking(
+    tracking, fps: float, s: BallSettings | None = None, poses: PoseTracks | None = None, swing=None
+) -> BallResult | None:
     """Convenience wrapper for a TrackingResult whose players already carry
     stable IDs (see courtshot.analysis.identities.stabilize_tracking).
+
+    poses: the players' keypoints, if they are already at hand (otherwise
+           they are read from the tracking)
+    swing: asked instead of the poses what a player's body did (see analyse_ball)
 
     Returns None when there are no ball detections or no calibration.
     """
@@ -550,9 +556,8 @@ def run_on_tracking(tracking, fps: float, s: BallSettings | None = None) -> Ball
             pos[(pf.frame_id, pf.player_id)] = (pf.position.x, pf.position.y)
     frames = [bf.frame_id for bf in tracking.ball_frames]
     s = s or BallSettings()
-    swing = None
-    if s.pose_check:
-        pose = PoseTracks(tracking)
+    if swing is None and s.pose_check:
+        pose = poses or PoseTracks(tracking)
         swing = lambda player, frame: pose.swing(player, frame, fps)  # noqa: E731
     return analyse_ball(
         ball_px,
@@ -567,3 +572,33 @@ def run_on_tracking(tracking, fps: float, s: BallSettings | None = None) -> Ball
         candidates={f: c for f, c in cands.items() if c},
         swing=swing,
     )
+
+
+def swings_asked(tracking, fps: float, s: BallSettings | None = None) -> list[tuple[str, float]]:
+    """Every (player, frame) whose swing run_on_tracking() and the shot
+    typing after it can ask for, whatever the swings turn out to be: each
+    player within reach of the ball at each break of its path, and whoever
+    serves. This is what tells courtshot.analysis.poses where pose keypoints are needed.
+
+    Found by running the ball analysis with a stand-in for the poses that
+    notes who it is asked about and calls everyone "standing still", so that
+    each break goes on to ask about the next player in reach.
+    """
+    from dataclasses import replace
+
+    from courtshot.analysis.swing import Swing
+
+    asked: list[tuple[str, float]] = []
+    still = Swing(frames=0, coverage=1.0, speed=0.0, arm_raise=None, overhead=False, still=True)
+
+    def note(player: str, frame: float) -> Swing:
+        asked.append((player, frame))
+        return still
+
+    everyone = replace(s or BallSettings(), pose_check=True, still_min_height=-np.inf)
+    result = run_on_tracking(tracking, fps, everyone, swing=note)
+    if result is None:
+        return []
+    # with everyone at the breaks "still", the hits left are the serves
+    asked.extend((e.player, e.frame) for e in result.events if e.kind == "hit" and e.player)
+    return asked

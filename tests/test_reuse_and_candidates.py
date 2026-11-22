@@ -67,10 +67,23 @@ class TestTrackingCacheKey:
         assert self._courtshot(tmp_path, enable_pose=False).tracking_key() != base
         assert self._courtshot(tmp_path, max_players=4).tracking_key() != base
 
-    def test_key_changes_with_pose_mode(self, tmp_path, monkeypatch):
-        base = self._courtshot(tmp_path).tracking_key()
-        monkeypatch.setenv("COURTSHOT_POSE_CLOSEUPS", "1")
-        assert self._courtshot(tmp_path).tracking_key() != base
+    def test_tracking_made_at_another_ball_stride_is_not_reused(self, tmp_path):
+        p = self._courtshot(tmp_path)
+        self._save_cache(p)
+        other = self._courtshot(tmp_path, ball_stride=p.ball_stride + 1)
+        reason = tracking_cache.stale_reason(p.cache_path, other.tracking_key())
+        assert reason is not None and "ball_stride" in reason
+
+    def test_cache_from_before_tracking_was_made_faster_is_reused(self, tmp_path):
+        """Its key has no player_fps and no ball_stride; it is tracking of
+        this video all the same."""
+        p = self._courtshot(tmp_path)
+        self._save_cache(p)
+        key_file = tracking_cache.key_path_for(p.cache_path)
+        old = {k: v for k, v in json.loads(key_file.read_text()).items() if k not in ("player_fps", "ball_stride")}
+        key_file.write_text(json.dumps(old))
+        assert tracking_cache.stale_reason(p.cache_path, p.tracking_key()) is None
+        assert self._courtshot(tmp_path).track() is not None and p.cache_path.exists()
 
     def test_retrained_model_under_the_same_name_changes_the_key(self, tmp_path):
         before = self._courtshot(tmp_path).tracking_key()

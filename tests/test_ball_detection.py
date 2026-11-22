@@ -25,17 +25,22 @@ class _ScriptedDetector(BallDetector):
     """BallDetector whose network output is given: one value per frame, and a
     window's heatmaps are filled with the values of its SEQ_LEN frames."""
 
-    def __init__(self, values: list[float]):
-        super().__init__("unused.pt")
+    def __init__(self, values: list[float], stride: int = 1):
+        super().__init__("unused.pt", stride=stride)
         self.values = values
-        self.seen = 0
+        self.windows = 0
 
-    def _forward(self, frame):
-        self.seen += 1
-        if self.seen < self.SEQ_LEN:
-            return None
-        window = self.values[self.seen - self.SEQ_LEN : self.seen]
-        return np.stack([_heatmap((100, 100, 2, v)) for v in window])
+    def prepare(self, frame):
+        return frame
+
+    def _buffer(self, resized):
+        pass
+
+    def _infer(self, ends):
+        self.windows += len(ends)
+        return np.stack(
+            [np.stack([_heatmap((100, 100, 2, v)) for v in self.values[end - self.SEQ_LEN : end]]) for end in ends]
+        )
 
 
 class TestCandidates:
@@ -62,14 +67,44 @@ class TestCandidates:
 
 
 class TestStreaming:
-    def _run(self, values):
-        det = _ScriptedDetector(values)
+    def _run(self, values, stride: int = 1, detector: list | None = None):
+        det = _ScriptedDetector(values, stride)
         frame = np.zeros(SHAPE, np.uint8)
         out = []
         for i in range(len(values)):
             out.extend(det.update(frame, i, i * 40.0))
         out.extend(det.flush())
+        if detector is not None:
+            detector.append(det)
         return out
+
+    def test_with_a_stride_the_model_runs_less_often_and_every_frame_still_gets_a_result(self):
+        values = [0.9] * 10 + [0.2] * 3 + [0.9] * 10  # 23 frames: the last ones need a window of their own
+        for stride in (2, 4, 8):
+            used: list = []
+            out = self._run(values, stride, used)
+            assert [bf.frame_id for bf in out] == list(range(23))
+            assert [bf.bbox is not None for bf in out] == [v > 0.5 for v in values]
+            on_the_grid = len(range(BallDetector.SEQ_LEN, 23 + 1, stride))
+            assert used[0].windows in (on_the_grid, on_the_grid + 1)  # + 1: the window for the last frames
+        assert used[0].windows == 3  # stride 8: frames 0-7, 8-15 and 15-22
+
+    def test_frames_pushed_together_give_what_they_give_one_by_one(self):
+        values = [0.9] * 10 + [0.2] * 3 + [0.9] * 14
+        frame = np.zeros(SHAPE, np.uint8)
+        for stride in (1, 2):
+            det = _ScriptedDetector(values, stride)
+            out = []
+            for start in (0, 5, 6, 14, 22):  # uneven groups, the first shorter than a window
+                ids = list(range(start, min(start + 8, len(values))))
+                if start == 5:
+                    ids = [5]
+                elif start == 0:
+                    ids = ids[:5]
+                out.extend(det.push_many([frame] * len(ids), SHAPE, ids, [i * 40.0 for i in ids]))
+            out.extend(det.flush())
+            assert [bf.frame_id for bf in out] == list(range(len(values)))
+            assert out == self._run(values, stride)
 
     def test_every_frame_comes_back_once_and_in_order(self):
         out = self._run([0.9] * 20)
