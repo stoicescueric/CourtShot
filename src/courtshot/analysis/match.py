@@ -1,7 +1,8 @@
 """
 Everything that is derived from a tracking cache, computed once:
 
-    raw tracking -> stable player IDs -> 2D ball events -> 3D ball flights
+    raw tracking -> stable player IDs -> poses around the ball's events
+                 -> 2D ball events -> 3D ball flights
 
 The tracked video, the match report and the 3D replay all start from the same
 MatchAnalysis, so they agree on who is who and on what the ball did.
@@ -14,21 +15,22 @@ settings it was made from are unchanged.
 
 from __future__ import annotations
 
-import hashlib
+import contextlib
 import json
 import logging
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
 
-from courtshot.analysis import ball_events, ball_flight
+from courtshot.analysis import ball_events, ball_flight, poses
 from courtshot.analysis.identities import (
     StableIdConfig,
     cache_appearance,
     frame_rate,
     stabilize_tracking,
 )
-from courtshot.tracking.cache import load_pickle, load_tracking
+from courtshot.analysis.swing import PoseTracks
+from courtshot.tracking.cache import file_sha1, key_path_for, load_pickle, load_tracking
 from courtshot.tracking.pipeline import TrackingResult
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,7 @@ class MatchAnalysis:
     fps: float
     ball: ball_events.BallResult | None  # None: no ball detections or no calibration
     ball3d: ball_flight.Ball3DResult | None  # None: no ball, or the 3D fit was skipped
+    poses: PoseTracks | None = None  # the players' keypoints; None: read them from the tracking
 
     @property
     def ball_speeds(self) -> dict[int, float] | None:
@@ -63,8 +66,9 @@ def analyse_cache(
     """Analyse the tracking saved in ``cache``.
 
     video:  the match video; only needed to make the players' appearance
-            vectors when they have not been saved yet (without them the
-            identities go by position and motion alone)
+            vectors and poses when they have not been saved yet (without
+            them the identities go by position and motion alone, and hits
+            and overheads by the ball alone)
     raw:    the tracking, if it is already in memory
     use_ball / fit_3d: switch off everything that needs the ball / the 3D fit
     refit:  redo the 3D fit even when a saved one could be reused
@@ -77,11 +81,27 @@ def analyse_cache(
     appearance = cache_appearance(cache, video=video, tracking=raw)
     stable, id_report = stabilize_tracking(raw, id_config, appearance)
 
-    ball = ball_events.run_on_tracking(stable, fps) if use_ball else None
-    ball3d = None
+    ball = ball3d = pose_tracks = poses_mark = None
+    if use_ball:
+        pose_tracks, poses_mark = _pose_tracks(cache, raw, stable, fps, id_report, video)
+        ball = ball_events.run_on_tracking(stable, fps, poses=pose_tracks)
     if ball is not None and fit_3d:
-        ball3d = ball3d_for(cache, stable, ball, fps, id_report, refit=refit)
-    return MatchAnalysis(cache, raw, stable, id_report, fps, ball, ball3d)
+        ball3d = ball3d_for(cache, stable, ball, fps, id_report, refit=refit, poses_mark=poses_mark)
+    return MatchAnalysis(cache, raw, stable, id_report, fps, ball, ball3d, pose_tracks)
+
+
+def _pose_tracks(cache: Path, raw, stable, fps: float, id_report, video) -> tuple[PoseTracks, str | None]:
+    """The players' keypoints, and what identifies them if they were made
+    after tracking (None when the tracking itself carries them)."""
+    if any(pf.keypoints for pf in raw.player_frames):  # a cache from when tracking made the poses
+        return PoseTracks(stable), None
+    wanted = True
+    key_file = key_path_for(cache)
+    if key_file.exists():
+        with contextlib.suppress(OSError, ValueError):
+            wanted = bool(json.loads(key_file.read_text(encoding="utf-8")).get("enable_pose", True))
+    lookup, mark = poses.poses_for(cache, stable, fps, id_report, video) if wanted else (None, None)
+    return PoseTracks(stable, poses=lookup), mark
 
 
 # ---------------------------------------------------------------------------
@@ -101,12 +121,8 @@ def fit_key(tracking_cache: Path, fps: float) -> dict:
     """What a saved 3D fit depends on: the tracking it was fitted to and the
     settings of the 2D and 3D ball steps. Kept next to the fit, so a fit made
     from other tracking (or other settings) is not reused."""
-    h = hashlib.sha1()
-    with open(tracking_cache, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
     return {
-        "tracking_sha1": h.hexdigest(),
+        "tracking_sha1": file_sha1(tracking_cache),
         "fps": round(fps, 4),
         "ball_settings": repr(ball_events.BallSettings()),
         "fit_settings": repr(ball_flight.FitSettings()),
@@ -131,10 +147,21 @@ def stale_reason(fit: Path, tracking_cache: Path, key: dict) -> str | None:
     return f"changed since it was fitted: {', '.join(changed)}" if changed else None
 
 
-def ball3d_for(tracking_cache, stable, ball, fps: float, id_report: dict | None = None, refit: bool = False):
+def ball3d_for(
+    tracking_cache,
+    stable,
+    ball,
+    fps: float,
+    id_report: dict | None = None,
+    refit: bool = False,
+    poses_mark: str | None = None,
+):
     """The 3D ball flights for a tracking cache: the saved fit when it was
     made from this tracking, these player identities and these settings,
     otherwise a new fit, which is saved.
+
+    poses_mark: what identifies the poses made after tracking, if the hits
+    were told with those (the fit depends on who hit the ball).
 
     Returns None when there is no court calibration or no ball track.
     """
@@ -142,7 +169,9 @@ def ball3d_for(tracking_cache, stable, ball, fps: float, id_report: dict | None 
     fit = fit_path(tracking_cache)
     key = fit_key(tracking_cache, fps)
     # who hit each ball depends on the player identities
-    key["player_ids"] = repr(StableIdConfig()) + " swaps " + json.dumps((id_report or {}).get("swaps_fixed", []))
+    key["player_ids"] = poses.player_ids_key(id_report)
+    if poses_mark is not None:
+        key["poses"] = poses_mark
     reason = "refit asked for" if refit else stale_reason(fit, tracking_cache, key)
     if fit.exists() and reason is None:
         try:

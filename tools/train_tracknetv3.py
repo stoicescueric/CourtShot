@@ -31,7 +31,9 @@ Data format (one folder per clip):
   x, y        ball centre in pixels of the original video/frames
   Frames missing from labels.csv count as "ball not visible", unless the
   file also has explicit visibility-0 rows (as label_ball.py writes): then
-  missing frames are treated as unlabelled and skipped.
+  missing frames are treated as unlabelled and skipped. `prepare
+  --unlabelled skip` does that for every clip (for clips labelled in part,
+  with no frame marked "no ball").
 
 Your own footage: label it with label_ball.py, which writes this layout.
 
@@ -167,7 +169,7 @@ def read_labels(path: Path) -> tuple[dict[int, tuple[float, float]], set[int]]:
     return out, rows
 
 
-def prepare(data: Path, cache: Path, quality: int = 92) -> None:
+def prepare(data: Path, cache: Path, quality: int = 92, skip_unlabelled: bool = False) -> None:
     clips = sorted(p for p in data.iterdir() if p.is_dir() and (p / "labels.csv").exists())
     if not clips:
         raise SystemExit(f"No clip folders with labels.csv found in {data}")
@@ -201,8 +203,10 @@ def prepare(data: Path, cache: Path, quality: int = 92) -> None:
         balls = {str(i): [x * sx, y * sy] for i, (x, y) in labels.items() if i < n}
         # If labels.csv lists "no ball" frames explicitly (label_ball.py does),
         # frames with no row at all are unlabelled, not "no ball": windows
-        # containing them are skipped in training.
-        explicit = len(rows) > len(labels)
+        # containing them are skipped in training. The same when asked for
+        # (--unlabelled skip): for clips where only some frames were labelled
+        # and none was marked "no ball".
+        explicit = skip_unlabelled or len(rows) > len(labels)
         unknown = sorted(set(range(n)) - rows) if explicit else []
         meta = {"frames": n, "orig_size": [orig_w, orig_h], "size": [W, H], "balls": balls, "unknown": unknown}
         (out / "meta.json").write_text(json.dumps(meta))
@@ -282,7 +286,19 @@ def target_heatmap(xy: tuple[float, float] | None) -> np.ndarray:
 class BallWindows(Dataset):
     """Windows of SEQ consecutive frames, plus a background frame."""
 
-    def __init__(self, clips: list[Clip], stride: int, train: bool, occlusion_aug: float = 0.0) -> None:
+    def __init__(
+        self,
+        clips: list[Clip],
+        stride: int,
+        train: bool,
+        occlusion_aug: float = 0.0,
+        stride_for: dict[str, int] | None = None,
+    ) -> None:
+        # stride_for: clip-name prefix -> stride, for clips that should give fewer
+        # (or more) windows than the rest, e.g. a large set mixed with a small one
+        def stride_of(name: str) -> int:
+            return next((n for prefix, n in (stride_for or {}).items() if name.startswith(prefix)), stride)
+
         self.clips = clips
         self.train = train
         self.occlusion_aug = occlusion_aug
@@ -290,7 +306,7 @@ class BallWindows(Dataset):
         self.index = [
             (ci, s)
             for ci, c in enumerate(clips)
-            for s in range(0, c.n - SEQ + 1, stride)
+            for s in range(0, c.n - SEQ + 1, stride_of(c.name))
             if not any(s + i in c.unknown for i in range(SEQ))
         ]
         self._bg = {c.name: cv2.imread(str(c.root / "background.jpg")) for c in clips}
@@ -511,13 +527,29 @@ def fmt(m: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
+def parse_stride_for(specs: list[str] | None) -> dict[str, int]:
+    """--stride-for ptk_=16 -> {"ptk_": 16}"""
+    out = {}
+    for spec in specs or []:
+        prefix, _, n = spec.rpartition("=")
+        if not prefix or not n.isdigit() or int(n) < 1:
+            raise SystemExit(f"--stride-for must look like PREFIX=N, got {spec!r}")
+        out[prefix] = int(n)
+    return out
+
+
 def make_loaders(args, clips):
     train_clips, val_clips = split_clips(clips, args.val)
     print(f"train clips: {[c.name for c in train_clips]}")
     print(f"val clips:   {[c.name for c in val_clips]}")
     train_ds = BallWindows(
-        train_clips, stride=args.stride, train=True, occlusion_aug=getattr(args, "occlusion_aug", 0.0)
+        train_clips,
+        stride=args.stride,
+        train=True,
+        occlusion_aug=getattr(args, "occlusion_aug", 0.0),
+        stride_for=parse_stride_for(getattr(args, "stride_for", None)),
     )
+    print(f"training windows: {len(train_ds)}")
     val_ds = BallWindows(val_clips, stride=args.val_stride, train=False)
     kw = {"num_workers": args.workers, "persistent_workers": args.workers > 0}
     train_dl = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=True, **kw)
@@ -595,6 +627,13 @@ def main() -> None:
     p.add_argument("--data", type=Path, default=Path("data"))
     p.add_argument("--cache", type=Path, default=Path("cache"))
     p.add_argument("--size", help="frame size the model sees, e.g. 1024x576 (default 512x288)")
+    p.add_argument(
+        "--unlabelled",
+        choices=["auto", "skip"],
+        default="auto",
+        help='frames with no row in labels.csv: "skip" leaves them out of training; "auto" does that only '
+        'for clips that mark "no ball" frames explicitly and takes them as "no ball" otherwise',
+    )
 
     for name in ("train", "evaluate"):
         q = sub.add_parser(name)
@@ -647,12 +686,19 @@ def main() -> None:
                 default=0.0,
                 help="share of training windows where the ball is hidden in 1-2 frames (try 0.3)",
             )
+            q.add_argument(
+                "--stride-for",
+                action="append",
+                metavar="PREFIX=N",
+                help="another --stride for the training clips whose name starts with PREFIX "
+                "(e.g. ptk_=16, to mix a large set with a small one); can be repeated",
+            )
             q.add_argument("--out", type=Path, default=Path("checkpoints/padel_tracknetv3.pt"))
 
     args = ap.parse_args()
     set_size(args.size)
     if args.cmd == "prepare":
-        prepare(args.data, args.cache)
+        prepare(args.data, args.cache, skip_unlabelled=args.unlabelled == "skip")
     elif args.cmd == "evaluate":
         cmd_evaluate(args)
     else:

@@ -19,7 +19,7 @@ import pickle
 from pathlib import Path
 
 from courtshot.schemas.tracking import CourtCalibration
-from courtshot.tracking.pipeline import TrackingResult
+from courtshot.tracking.pipeline import BALL_STRIDE, PLAYER_FPS, TrackingResult
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,25 @@ def cache_path_for(video: str | Path, cache_dir: str | Path | None = None) -> Pa
 
 def key_path_for(cache: Path) -> Path:
     return cache.with_suffix(".key.json")
+
+
+_sha1_of: dict[tuple[str, int, int], str] = {}
+
+
+def file_sha1(path: str | Path) -> str:
+    """SHA-1 of a file's contents. What is derived from a tracking cache (the
+    appearance vectors, the poses, the 3D fit) is keyed by it; the cache of a
+    whole match is large, so the answer is kept while the file stays as it is."""
+    path = Path(path)
+    stat = path.stat()
+    known = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    if known not in _sha1_of:
+        h = hashlib.sha1()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        _sha1_of[known] = h.hexdigest()
+    return _sha1_of[known]
 
 
 class _LegacyField:
@@ -84,9 +103,9 @@ def tracking_key(
     ball_model: str | Path | None,
     enable_pose: bool,
     max_players: int | None,
+    ball_stride: int = BALL_STRIDE,
 ) -> dict[str, object]:
     """Everything the cached tracking depends on."""
-    from courtshot.tracking.device import use_pose_closeups_only
 
     def file_id(path: str | Path | None) -> str | None:
         if path is None:
@@ -103,8 +122,16 @@ def tracking_key(
         "enable_pose": enable_pose,
         "tracker": os.environ.get("COURTSHOT_TRACKER", "courtshot_bytetrack.yaml"),
         "max_players": max_players,
-        "pose_closeups_only": bool(enable_pose and use_pose_closeups_only()),
+        "pose_closeups_only": False,  # pose was part of tracking once; kept so older caches still match
+        "player_fps": PLAYER_FPS,
+        "ball_stride": ball_stride,
     }
+
+
+# Settings tracking has had since it was made faster. A cache from before has
+# none of them in its key. It is tracking of the same video all the same (with
+# the pose keypoints in it), so it is reused rather than made again.
+_SINCE_FAST_TRACKING = ("player_fps", "ball_stride")
 
 
 def stale_reason(cache: Path, key: dict[str, object]) -> str | None:
@@ -127,7 +154,7 @@ def stale_reason(cache: Path, key: dict[str, object]) -> str | None:
     tracker = saved.get("tracker")
     if isinstance(tracker, str) and tracker.startswith("padex_"):
         saved["tracker"] = "courtshot_" + tracker[len("padex_") :]
-    changed = [k for k in key if saved.get(k) != key[k]]
+    changed = [k for k in key if saved.get(k) != key[k] and not (k in _SINCE_FAST_TRACKING and k not in saved)]
     return f"changed since it was made: {', '.join(changed)}" if changed else None
 
 

@@ -30,7 +30,7 @@ from courtshot.analysis.identities import SLOT_NAMES, SLOT_TEAMS, StableIdConfig
 from courtshot.analysis.match import MatchAnalysis, analyse_cache, fit_path
 from courtshot.schemas.tracking import CourtCalibration
 from courtshot.tracking import cache as tracking_cache
-from courtshot.tracking.pipeline import TrackingPipeline, TrackingResult
+from courtshot.tracking.pipeline import BALL_STRIDE, TrackingPipeline, TrackingResult
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,8 @@ class CourtShot:
     cache_tracking:   save / reuse the tracking next to the video
     cache_dir:        where the cache goes (default: next to the video)
     max_players:      people kept per frame for the identity step to choose from
+    ball_stride:      the ball model runs every this many frames (1..8); more
+                      than 1 is faster and changes some of the hits found
     id_config:        settings of the identity step
     """
 
@@ -82,6 +84,7 @@ class CourtShot:
         cache_dir: str | Path | None = None,
         max_players: int = DEFAULT_MAX_PLAYERS,
         id_config: StableIdConfig | None = None,
+        ball_stride: int = BALL_STRIDE,
     ) -> None:
         self.video_path = Path(video_path)
         if not self.video_path.exists():
@@ -94,6 +97,7 @@ class CourtShot:
         self.cache_tracking = cache_tracking
         self.cache_path = tracking_cache.cache_path_for(self.video_path, cache_dir)
         self.max_players = max_players
+        self.ball_stride = ball_stride
         self.id_config = id_config
         self.tracking_from_cache = False
 
@@ -102,7 +106,12 @@ class CourtShot:
     def tracking_key(self) -> dict[str, object]:
         """What the cached tracking of this video depends on."""
         return tracking_cache.tracking_key(
-            self.video_path, self.calibration, self.ball_model_path, self.enable_pose, self.max_players
+            self.video_path,
+            self.calibration,
+            self.ball_model_path,
+            self.enable_pose,
+            self.max_players,
+            self.ball_stride,
         )
 
     def track(self) -> TrackingResult:
@@ -127,8 +136,8 @@ class CourtShot:
             video_path=self.video_path,
             ball_model_path=self.ball_model_path,
             calibration=self.calibration,
-            enable_pose=self.enable_pose,
             max_players=self.max_players,
+            ball_stride=self.ball_stride,
         ).run()
         logger.info(
             "Tracking done: %d player frames, %d ball frames", len(tracking.player_frames), len(tracking.ball_frames)
@@ -150,7 +159,7 @@ class CourtShot:
         """
         raw = self.track()
         if not self.cache_path.exists():
-            logger.warning("Tracking is not cached: no appearance check and no 3D ball fit")
+            logger.warning("Tracking is not cached: no appearance check, no poses and no 3D ball fit")
             from courtshot.analysis import ball_events
             from courtshot.analysis.identities import frame_rate, stabilize_tracking
 
@@ -189,7 +198,9 @@ class CourtShot:
 
         shots = []
         if ball is not None:
-            shots = shot_stats.build_shots(ball, tracking, dict(zip(SLOT_NAMES, SLOT_TEAMS)), ball3d, analysis.fps)
+            shots = shot_stats.build_shots(
+                ball, tracking, dict(zip(SLOT_NAMES, SLOT_TEAMS)), ball3d, analysis.fps, poses=analysis.poses
+            )
         shot_counts = Counter(s.type for s in shots)
         top_types = [(k.replace("_", "/"), n) for k, n in shot_counts.most_common(4)]
 

@@ -23,7 +23,6 @@ vectors close to it in time, so every frame of a track has one.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -211,12 +210,10 @@ def sidecar(tracking_cache: str | Path) -> Path:
 
 
 def _key(tracking_cache: Path) -> dict:
-    h = hashlib.sha1()
-    with open(tracking_cache, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
+    from courtshot.tracking.cache import file_sha1
+
     return {
-        "tracking_sha1": h.hexdigest(),
+        "tracking_sha1": file_sha1(tracking_cache),
         "model": MODEL,
         "samples_per_second": SAMPLES_PER_SECOND,
         "crop": [list(CROP_X), list(CROP_Y)],

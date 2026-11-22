@@ -48,6 +48,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             calibration=args.calibration,
             ball_model_path=args.ball_model,
             cache_tracking=not args.no_cache,
+            **({} if args.ball_stride is None else {"ball_stride": args.ball_stride}),
         )
     except (FileNotFoundError, ValueError) as exc:
         sys.exit(str(exc))
@@ -127,6 +128,12 @@ def main() -> None:
         "--ball-model", type=Path, default=None, help="TrackNetV3 weights (default: checkpoints/padel_tracknetv3.pt)"
     )
     p.add_argument("-o", "--out", type=Path, default=None, help="output folder (default: output/<video name>/)")
+    p.add_argument(
+        "--ball-stride",
+        type=int,
+        default=None,
+        help="run the ball model every this many frames, 1..8 (default 1; 2 is faster, some hits come out differently)",
+    )
     p.add_argument("--no-cache", action="store_true", help="neither reuse nor save the tracking")
     p.add_argument("--no-video", action="store_true", help="skip the tracked video")
     p.add_argument("--redo-video", action="store_true", help="write the tracked video even if it is up to date")
