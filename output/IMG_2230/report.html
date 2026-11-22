@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Match report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<style>
+/* CourtShot brand: dark first. Ink background, Graphite cards, Fog text, Mist
+   secondary text; Volt = data series 1 and the one key number, Court Blue =
+   series 2, Clay = errors. Inter 400 / 500 / 600. */
+:root, :root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000000; --card: #1c1c1e; --raise: #2c2c2e; --line: rgba(255,255,255,.09); --line-strong: #3a3a3c;
+  --text: #f5f5f7; --text2: #a1a1a6; --muted: #7c7c82;
+  --t1: #d4f542; --t2: #4d8dff; --t1-soft: rgba(212,245,66,.16); --t2-soft: rgba(77,141,255,.2);
+  --key: #d4f542; --clay: #ff8a65;
+  --court: #111113; --court2: #161618; --court-line: rgba(255,255,255,.6); --court-text: rgba(245,245,247,.6);
+  --accent: #f5f5f7; --accent-text: #000000;
+  --heat1: linear-gradient(90deg, rgba(92,107,0,.35), #8fa71c, #d4f542, #fbffe0);
+  --heat2: linear-gradient(90deg, rgba(36,72,160,.4), #3468d0, #4d8dff, #e3ecff);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f5f7; --card: #ffffff; --raise: #ededf0; --line: rgba(0,0,0,.08); --line-strong: #d2d2d7;
+  --text: #000000; --text2: #55555a; --muted: #86868b;
+  --t1: #5c6b00; --t2: #2f6fe6; --t1-soft: rgba(92,107,0,.12); --t2-soft: rgba(47,111,230,.12);
+  --key: #5c6b00; --clay: #c8502a;
+  --court: #f5f5f7; --court2: #efeff2; --court-line: rgba(0,0,0,.38); --court-text: rgba(0,0,0,.5);
+  --accent: #000000; --accent-text: #f5f5f7;
+  --heat1: linear-gradient(90deg, rgba(212,245,66,.35), #c3e230, #93aa14, #5c6b00);
+  --heat2: linear-gradient(90deg, rgba(160,196,255,.45), #7daeff, #4d8dff, #1746b4);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 400 15px/1.5 Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased; font-feature-settings: "cv11", "ss01";
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px 96px; }
+
+/* header: lockup, then the match name in display type */
+.brandbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0 0; }
+.lockup { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 22px; letter-spacing: -.035em; color: var(--text); min-width: 120px; }
+.lockup svg { width: 30px; height: 30px; flex: none; }
+header.top { padding: 44px 0 20px; display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: flex-end; justify-content: space-between; }
+.eyebrow { font-size: 13px; color: var(--text2); font-weight: 500; }
+h1 { font-size: clamp(36px, 6vw, 56px); line-height: 1.05; margin: 6px 0 10px; font-weight: 600; letter-spacing: -.035em; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--text2); font-size: 15px; }
+.sides { display: flex; gap: 8px; flex-wrap: wrap; }
+.side { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line-strong); border-radius: 999px; padding: 8px 14px 8px 12px; font-weight: 500; font-size: 14px; }
+.side small { color: var(--muted); font-weight: 400; }
+
+/* identity marks: colour AND shape. T_1 round, T_2 square; the second player of a pair is hollow */
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.T_1 { background: var(--t1); } .dot.T_2 { background: var(--t2); border-radius: 2.5px; }
+.dot.ring { background: transparent !important; border: 2px solid; }
+.dot.ring.T_1 { border-color: var(--t1); } .dot.ring.T_2 { border-color: var(--t2); }
+.who { display: inline-flex; align-items: center; gap: 7px; }
+
+nav.tabs { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 72%, transparent); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+  display: flex; gap: 2px; padding: 10px 0; margin-bottom: 4px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+nav.tabs button, .seg button, .theme {
+  font: inherit; font-size: 14px; color: var(--text2); background: transparent; border: 0; border-radius: 999px; padding: 8px 16px; cursor: pointer; white-space: nowrap; font-weight: 500;
+  transition: background .15s, color .15s;
+}
+nav.tabs button:hover, .seg button:hover, .theme:hover { color: var(--text); }
+nav.tabs button[aria-selected="true"], .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+nav.tabs .spacer { flex: 1; }
+.theme { border: 1px solid var(--line-strong); }
+button:focus-visible, select:focus-visible { outline: 2px solid var(--t2); outline-offset: 2px; }
+
+section.page { display: none; } section.page.on { display: block; animation: rise .25s ease-out; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { section.page.on { animation: none; } }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(12, minmax(0, 1fr)); margin-top: 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 24px 26px 26px; grid-column: span 12; min-width: 0; }
+.c3 { grid-column: span 3; } .c4 { grid-column: span 4; } .c5 { grid-column: span 5; } .c6 { grid-column: span 6; } .c7 { grid-column: span 7; } .c8 { grid-column: span 8; }
+@media (max-width: 900px) { .c3 { grid-column: span 6; } .c4, .c5, .c6, .c7, .c8 { grid-column: span 12; } .card { padding: 20px; border-radius: 20px; } }
+@media (max-width: 520px) { .c3 { grid-column: span 12; } }
+.card h2 { font-size: 19px; margin: 0 0 4px; font-weight: 600; letter-spacing: -.02em; }
+.card .sub { color: var(--text2); font-size: 13.5px; margin: 0 0 18px; max-width: 68ch; }
+.note { color: var(--text2); font-size: 15px; line-height: 1.55; }
+
+/* match summary: stat numerals, one of them the key number */
+.hero { margin-top: 16px; }
+.hero-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 26px; }
+.hero-head h2 { font-size: 22px; margin: 0; display: flex; align-items: center; gap: 12px; }
+.hero-head h2 svg { width: 30px; height: 30px; }
+.chip { font-size: 12.5px; color: var(--text2); border: 1px solid var(--line-strong); border-radius: 999px; padding: 4px 12px; white-space: nowrap; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 26px 20px; }
+.stat .k { color: var(--text2); font-size: 13.5px; }
+.stat .v { font-size: 44px; line-height: 1.1; font-weight: 600; letter-spacing: -.035em; font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; }
+.stat .v small { font-size: 17px; font-weight: 400; letter-spacing: 0; color: var(--text2); margin-left: 6px; }
+.stat.key .v { color: var(--key); }
+.stat .s { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+
+/* team comparison rows */
+.cmp-head { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; font-weight: 600; margin-bottom: 8px; }
+.cmp-head div:last-child { text-align: right; }
+.cmp { padding: 11px 0; border-top: 1px solid var(--line); }
+.cmp .vals { display: grid; grid-template-columns: 112px 1fr 112px; align-items: center; }
+.cmp .vals .lab { text-align: center; color: var(--text2); font-size: 14px; }
+.cmp .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+.cmp .v.r { text-align: right; }
+.cmp .v span { display: inline-block; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
+.cmp .v.lead.T_1 span { background: var(--t1-soft); } .cmp .v.lead.T_2 span { background: var(--t2-soft); }
+.cmp .bars { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; margin-top: 7px; }
+.cmp .bars div { height: 4px; background: var(--raise); border-radius: 4px; position: relative; overflow: hidden; }
+.cmp .bars i { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.cmp .bars div:first-child i { right: 0; background: var(--t1); } .cmp .bars div:last-child i { left: 0; background: var(--t2); }
+
+/* bar lists and stat lists */
+.bl { display: grid; grid-template-columns: minmax(84px, max-content) 1fr max-content; gap: 10px 12px; align-items: center; }
+.bl .k { color: var(--text2); font-size: 14px; }
+.bl .track { height: 6px; background: var(--raise); border-radius: 4px; overflow: hidden; }
+.bl .track i { display: block; height: 100%; border-radius: 4px; min-width: 2px; }
+.bl .n { font-weight: 600; font-variant-numeric: tabular-nums; font-size: 14px; text-align: right; }
+.bl .n small { color: var(--muted); font-weight: 400; margin-left: 5px; }
+.fill.T_1 { background: var(--t1); } .fill.T_2 { background: var(--t2); }
+.sl { display: grid; grid-template-columns: 1fr auto; }
+.sl > div { padding: 11px 0; border-top: 1px solid var(--line); }
+.sl > div:nth-child(-n+2) { border-top: 0; padding-top: 2px; }
+.sl .k { color: var(--text2); } .sl .n { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.sl .n small { color: var(--muted); font-weight: 400; }
+
+/* mirrored shot-type bars */
+.mir { display: grid; grid-template-columns: 30px 1fr minmax(104px, max-content) 1fr 30px; gap: 12px 10px; align-items: center; }
+.mir .lab { text-align: center; color: var(--text2); font-size: 14px; }
+.mir .n { font-weight: 600; font-variant-numeric: tabular-nums; } .mir .n.r { text-align: right; }
+.mir .track { height: 6px; background: var(--raise); border-radius: 4px; position: relative; overflow: hidden; }
+.mir .track i { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.mir .track.l i { right: 0; background: var(--t1); } .mir .track.r i { left: 0; background: var(--t2); }
+
+/* heatmaps */
+.heat { position: relative; width: 100%; aspect-ratio: 1 / 1; border-radius: 16px; overflow: hidden; background: var(--court); border: 1px solid var(--line); }
+.heat canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.heat .tag { position: absolute; left: 50%; transform: translateX(-50%); font-size: 11px; color: var(--court-text); font-weight: 500; pointer-events: none; }
+.heat .tag.net { top: 9px; } .heat .tag.back { bottom: 8px; }
+.scales { display: flex; flex-wrap: wrap; gap: 8px 28px; margin-top: 16px; }
+.scale { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; }
+.scale i { width: 120px; height: 6px; border-radius: 4px; }
+.scale i.T_1 { background: var(--heat1); } .scale i.T_2 { background: var(--heat2); }
+.minis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 760px) { .minis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mini { cursor: pointer; border: 0; background: none; padding: 0; text-align: left; font: inherit; color: inherit; border-radius: 16px; }
+.mini .name { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 10px; }
+.mini .name small { color: var(--muted); font-weight: 400; margin-left: auto; font-size: 12.5px; }
+.mini .heat { transition: transform .2s ease; } .mini:hover .heat { transform: scale(1.015); }
+
+.seg { display: flex; gap: 2px; flex-wrap: wrap; background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 4px; width: fit-content; max-width: 100%; }
+.seg button { display: inline-flex; align-items: center; gap: 8px; }
+.seg button[aria-pressed="true"] .dot { background: var(--accent-text); }
+.seg button[aria-pressed="true"] .dot.ring { border-color: var(--accent-text); }
+.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
+select { font: inherit; font-size: 14px; font-weight: 500; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 11px 16px; }
+
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { fill: var(--muted); font-size: 11px; font-family: inherit; }
+.court-bg { fill: var(--court); } .court-ln { stroke: var(--court-line); fill: none; }
+.shot { cursor: pointer; transition: opacity .12s; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--text2); font-size: 13px; margin-top: 14px; align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+
+.scroll { overflow: auto; max-height: 560px; border-radius: 14px; border: 1px solid var(--line); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 11px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+th { position: sticky; top: 0; background: var(--card); color: var(--muted); font-weight: 500; font-size: 12.5px; z-index: 1; }
+td.l, th.l { text-align: left; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: var(--raise); }
+
+#tip { position: fixed; z-index: 20; pointer-events: none; background: var(--accent); color: var(--accent-text); border-radius: 12px; padding: 9px 12px; font-size: 13px; line-height: 1.4; max-width: 270px; opacity: 0; transition: opacity .1s; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+#tip b { display: block; font-weight: 600; } #tip.on { opacity: 1; }
+.about dl { display: grid; grid-template-columns: max-content 1fr; gap: 12px 24px; margin: 0; max-width: 100ch; } .about dt { font-weight: 600; } .about dd { margin: 0; color: var(--text2); }
+@media (max-width: 640px) { .about dl { grid-template-columns: 1fr; gap: 2px; } .about dd { margin-bottom: 12px; } }
+.empty { color: var(--muted); padding: 18px 0; }
+footer { color: var(--muted); font-size: 12.5px; margin-top: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brandbar">
+    <span class="lockup" id="lockup" aria-label="CourtShot"></span>
+  </div>
+  <header class="top">
+    <div>
+      <div class="eyebrow">Match report</div>
+      <h1 id="title"></h1>
+      <div class="meta" id="meta"></div>
+    </div>
+    <div class="sides" id="sides"></div>
+  </header>
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+  <section class="page" id="p-overview"></section>
+  <section class="page" id="p-players"></section>
+  <section class="page" id="p-shots"></section>
+  <section class="page" id="p-rallies"></section>
+  <section class="page about" id="p-about"></section>
+  <footer>CourtShot · tracking and statistics</footer>
+</div>
+<div id="tip" role="status"></div>
+<script>
+const D = {"title":"IMG_2230","duration_s":422.8,"t0":0.0333,"fps":60.0,"settings":{"net_zone":4.0,"back_zone":7.0,"still_speed":0.5,"sprint_speed":4.0,"rally_source":"movement","service_line":6.95},"players":[{"id":"P_1","team":"T_1","move":{"team":"T_1","tracked":0.8426,"interpolated":0.013,"distance_m":281.755,"distance_in_rallies_m":214.73,"top_speed_ms":8.2626,"sprints":3,"avg_dist_to_net_m":5.482,"time_at_net":0.3012,"time_in_middle":0.3642,"time_at_back":0.3347,"court_coverage":0.51,"time_left_side":0.8581},"shots":{"shots":26,"by_type":{"serve":1,"drive":11,"lob":2,"volley":2,"bandeja_vibora":5,"smash":0,"bajada":0,"chiquita":0,"other":5},"attacking_share":0.269,"avg_speed_kmh":41.29,"max_speed_kmh":118.9,"avg_contact_height_m":1.31,"direction":{"cross":5,"middle":3,"line":5},"from_zone":{"net":11,"middle":5,"back":10},"deep_share":0.125,"targets":{"P_3":6,"P_4":3},"winners":1,"errors":0},"heat":[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,40,28,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,36,20,13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,30,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,63,34,12,0,17,11,16,18,4,0,0,0,0,0,0,0,0,2,5,0,7,7,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,24,45,21,5,26,8,2,0,0,0,0,0,0,8,11,8,5,3,1,23,12,4,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,22,16,10,2,5,0,0,10,7,0,0,0,0,5,3,0,0,0,0,0,14,0,0,0,0,0,0],[0,0,0,0,0,0,8,0,0,0,0,0,0,10,24,34,6,0,0,0,0,4,0,0,0,3,11,0,0,0,0,0,1,8,0,0,0,0,0,0],[0,0,0,0,0,0,2,3,0,0,0,0,0,0,0,6,8,0,0,0,0,4,0,0,0,5,0,0,0,0,0,0,5,2,0,0,0,0,0,0],[0,0,0,0,0,0,1,2,1,0,0,0,0,0,25,17,5,0,0,0,0,3,0,0,1,4,0,0,0,0,0,3,6,2,0,0,0,0,0,0],[0,0,0,0,0,0,0,1,3,0,0,0,0,3,10,0,0,0,0,0,0,11,8,0,20,0,0,0,0,0,0,7,0,2,0,0,0,0,0,0],[0,0,0,0,0,0,0,1,1,4,0,0,0,15,79,0,0,0,0,4,0,2,2,4,9,0,0,0,0,0,2,2,0,3,0,0,0,0,0,0],[0,0,0,0,0,0,0,16,0,2,15,0,31,88,24,55,0,0,6,18,11,4,0,3,6,0,0,0,0,0,6,0,2,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,41,4,3,117,45,164,87,37,27,0,8,26,15,60,5,0,0,17,0,0,0,0,2,7,0,2,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,43,24,50,103,86,40,102,0,2,4,9,20,26,15,9,0,0,7,0,0,0,0,8,0,0,2,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,173,19,10,111,44,52,51,63,0,5,23,7,1,14,4,1,0,5,0,11,17,9,6,0,0,2,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,169,1,26,73,85,62,158,45,15,8,15,3,0,8,3,7,2,22,7,0,0,4,0,0,0,3,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,23,36,133,44,44,68,40,25,32,23,7,1,3,11,19,14,44,21,0,0,0,4,0,0,0,4,0,0,0,0,0,0,0],[0,0,0,0,0,0,10,56,12,100,8,34,16,46,55,54,1,0,0,12,1,0,0,0,5,0,0,2,6,0,0,0,14,38,7,4,5,0,0,0],[0,0,0,0,0,0,12,9,17,92,7,41,10,91,53,1,17,10,16,4,0,0,0,0,9,0,0,4,0,0,0,0,3,0,10,14,17,46,35,0],[0,0,0,0,0,0,67,28,25,65,44,28,45,109,35,16,0,5,9,6,0,0,0,0,7,13,1,2,0,0,4,3,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,14,12,20,32,24,37,8,38,0,0,4,0,5,4,4,4,10,3,6,2,3,3,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,42,12,54,72,30,6,13,18,0,0,4,28,0,0,0,0,4,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,26,37,59,27,75,17,1,59,53,10,14,30,0,0,0,0,4,10,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,36,26,40,74,83,82,0,92,47,3,3,13,7,7,8,8,8,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,5,24,26,99,301,61,15,3,18,15,7,3,3,0,0,0,0,7,5,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,20,20,49,69,125,80,8,39,14,22,7,0,0,0,0,0,11,15,4,2,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,9,9,54,83,52,25,59,54,17,7,0,0,0,2,7,3,5,0,8,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,36,115,63,26,79,37,19,73,3,0,0,15,14,0,0,3,0,2,5,5,10,13,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,3,33,49,46,4,105,80,80,33,10,8,6,9,0,0,0,3,0,0,0,0,0,12,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,22,9,6,8,41,54,24,18,93,128,13,8,49,4,10,32,0,0,0,15,0,0,0,0,0,7,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,16,13,85,54,20,41,50,37,28,10,33,0,0,24,7,2,2,20,0,0,0,0,0,7,11,10,0,0,0,0,0,0,0],[0,0,0,0,0,0,4,74,29,46,36,23,38,70,62,22,0,0,0,22,7,14,4,4,40,15,0,0,0,0,0,15,15,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,58,191,159,87,53,61,45,22,7,0,0,0,9,0,9,0,10,18,0,0,0,0,0,3,6,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,75,685,425,425,152,148,182,37,14,12,13,12,7,18,17,65,72,62,81,40,84,33,82,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],"heat_seconds":250.4833},{"id":"P_2","team":"T_1","move":{"team":"T_1","tracked":0.7809,"interpolated":0.0324,"distance_m":289.7714,"distance_in_rallies_m":237.5439,"top_speed_ms":9.6422,"sprints":3,"avg_dist_to_net_m":6.0407,"time_at_net":0.2174,"time_in_middle":0.275,"time_at_back":0.5075,"court_coverage":0.46,"time_left_side":0.0688},"shots":{"shots":21,"by_type":{"serve":0,"drive":9,"lob":4,"volley":1,"bandeja_vibora":3,"smash":1,"bajada":0,"chiquita":0,"other":3},"attacking_share":0.238,"avg_speed_kmh":43.8,"max_speed_kmh":125.5,"avg_contact_height_m":1.37,"direction":{"cross":2,"middle":8,"line":1},"from_zone":{"net":5,"middle":5,"back":11},"deep_share":0.2,"targets":{"P_3":6,"P_4":1},"winners":0,"errors":1},"heat":[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,38,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,17,0,0,0,0,0,0,0,28,42,21,23,12,23,11,22,13,19,15,13,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,8,3,2,15,30,27,0,0,0,0,1],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,1,0,0,0,0,0,0,0,0,3,0,0,0,6,28,16,1,0,26,0,0,0,0,5],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0,0,0,0,0,0,25,13,9,9,1,0,0,14,0,0,5,0,0,0,0,3],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11,10,0,0,0,0,6,35,21,24,0,0,6,0,14,34,0,0,0,9,0,0,0,4],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,2,0,0,0,11,29,0,0,11,4,43,54,31,73,6,0,0,3,0,0,5,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,0,0,2,47,4,0,0,43,42,73,14,4,24,17,7,0,2,0,3,3,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,9,0,13,6,4,0,0,0,9,16,33,15,6,14,13,7,1,3,3,1,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,9,19,16,0,0,0,37,22,21,15,11,34,36,2,4,6,1,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,18,54,7,0,0,5,4,32,11,44,7,21,27,0,13,1,2,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,20,0,7,11,0,4,32,55,24,12,47,26,30,25,15,15,11,1,1,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,1,12,41,13,24,6,7,2,5,23,32,11,0,4,27,17,2,10,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,9,4,12,8,28,20,6,5,5,7,0,1,49,8,5,2,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,21,0,8,23,29,4,0,47,45,9,6,26,0,0,24,4,5,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,0,0,7,18,7,0,0,18,10,16,14,0,11,55,10,1,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0,0,28,23,16,29,13,0,9,8,7,21,0,6,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,18,0,0,0,29,36,14,12,19,21,17,17,15,5,0,6,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,5,0,0,11,6,70,27,10,11,6,29,2,3,1,11,0,3,6],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,0,0,29,12,92,139,64,17,15,14,11,5,2,9,0,4,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,17,2,0,7,21,24,0,0,9,49,22,19,26,7,14,6,1,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,21,31,18,16,0,46,38,30,25,5,20,3,20,2,0,6],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,12,16,10,41,20,28,13,9,25,12,1,7,1,10,1,3,1],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,24,26,13,54,55,11,16,13,40,46,1,5,5,10,7,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,6,93,31,34,25,32,26,12,33,35,2,22,13,9,21,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,30,161,80,6,12,49,10,2,53,40,10,12,9,3,3,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,9,19,19,9,12,61,41,41,34,10,16,9,3,2,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,66,99,97,43,26,88,51,8,46,97,102,31,2,0,0,0,0],[0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,9,11,61,98,70,63,109,57,16,18,37,128,31,0,0,0,0,0],[0,0,0,0,0,0,2,1,0,0,0,0,0,0,0,0,0,0,0,0,0,10,10,6,104,68,13,99,128,163,88,50,56,27,8,0,0,0,0,0],[0,0,0,0,0,0,0,2,0,24,13,2,3,2,0,0,0,7,12,41,24,38,4,43,157,19,50,139,113,164,198,51,156,16,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,3,9,20,0,0,1,12,33,31,15,11,36,39,11,16,20,113,108,29,132,194,89,204,125,7,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,6,83,79,47,48,43,35,65,71,36,32,76,75,35,43,36,123,201,296,374,338,468,592,44,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],"heat_seconds":240.5167},{"id":"P_3","team":"T_2","move":{"team":"T_2","tracked":0.9076,"interpolated":0.0635,"distance_m":343.8034,"distance_in_rallies_m":299.5449,"top_speed_ms":9.0456,"sprints":17,"avg_dist_to_net_m":5.382,"time_at_net":0.3697,"time_in_middle":0.2623,"time_at_back":0.368,"court_coverage":0.62,"time_left_side":0.87},"shots":{"shots":28,"by_type":{"serve":1,"drive":13,"lob":2,"volley":3,"bandeja_vibora":3,"smash":0,"bajada":1,"chiquita":1,"other":4},"attacking_share":0.25,"avg_speed_kmh":54.62,"max_speed_kmh":82.8,"avg_contact_height_m":1.17,"direction":{"cross":9,"middle":4,"line":7},"from_zone":{"net":9,"middle":6,"back":13},"deep_share":0.1,"targets":{"P_2":11,"P_1":4},"winners":1,"errors":0},"heat":[[0,0,0,0,0,80,35,1,13,0,0,0,0,18,18,34,15,31,2,0,0,0,0,0,29,85,4,0,0,0,1,27,0,0,0,0,0,0,0,0],[31,22,16,11,0,12,9,4,0,0,0,0,0,0,0,0,0,0,26,51,0,0,0,0,10,4,3,0,0,0,5,0,0,0,0,0,0,0,0,0],[5,0,7,0,0,5,36,27,9,7,11,0,0,0,0,0,35,0,0,15,0,0,0,5,4,14,0,0,0,0,3,0,0,0,0,0,0,0,0,0],[18,0,11,10,9,7,12,6,5,0,7,14,0,0,0,0,10,16,12,1,0,0,13,14,0,8,0,0,0,4,1,0,0,0,0,0,0,0,0,0],[31,0,10,0,0,0,14,6,36,7,3,1,0,0,0,51,30,5,15,0,0,0,9,0,0,4,0,3,3,0,0,0,0,0,0,0,0,0,0,0],[3,10,5,8,1,5,4,21,16,9,13,9,24,0,0,28,14,0,14,0,0,14,16,0,0,11,3,0,0,0,0,0,0,0,0,0,0,0,0,0],[5,7,18,12,16,10,0,0,9,2,18,16,7,10,10,38,2,1,11,0,0,12,1,3,3,13,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,4,6,0,0,17,15,0,4,6,7,31,12,13,39,0,0,2,13,2,0,3,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,6,2,0,0,16,36,3,5,33,19,4,69,136,41,31,50,32,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,5,3,0,1,8,19,0,0,133,128,20,51,67,94,26,17,8,0,0,0,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,2,4,2,14,3,16,28,8,66,45,68,18,28,110,15,40,75,0,0,0,0,7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,4,3,6,5,11,26,34,5,38,110,34,7,117,32,9,10,67,4,3,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,4,0,2,14,13,6,14,2,14,196,93,37,48,10,4,47,20,3,7,4,11,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,4,0,0,16,0,0,4,32,3,11,144,52,28,66,23,76,42,44,5,0,3,7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,4,0,13,12,0,0,17,54,7,21,44,50,42,64,54,93,22,12,12,14,0,8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,3,1,0,14,0,0,0,43,43,11,19,14,22,24,35,76,72,9,15,21,20,16,7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,4,0,0,12,0,0,0,0,7,3,0,12,23,23,23,72,90,31,8,14,16,6,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[1,3,0,0,3,0,0,0,1,10,0,0,26,4,14,60,56,8,22,6,15,11,7,14,12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[3,0,0,0,2,0,0,0,4,7,0,0,3,10,26,35,57,6,14,9,69,51,30,19,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[3,0,0,0,2,0,0,0,3,9,0,0,15,11,26,15,27,9,20,11,74,12,17,50,19,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[2,0,0,0,2,0,0,0,3,3,0,0,20,19,61,13,16,14,29,0,6,10,17,31,19,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[2,0,0,0,2,0,0,2,1,2,0,0,17,0,23,19,8,16,16,6,10,14,2,26,1,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[2,0,0,0,4,0,0,3,0,3,0,3,7,14,28,9,44,8,44,10,3,3,3,14,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,6,0,0,4,5,9,0,8,4,23,13,4,24,11,21,11,0,3,9,4,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,2,1,0,3,3,0,0,9,7,18,19,4,10,21,32,15,2,1,3,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,5,3,0,4,4,9,5,12,22,16,4,12,53,45,19,5,2,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0],[1,0,0,0,0,3,20,4,32,0,0,11,117,71,111,27,80,148,92,64,18,18,3,3,5,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0],[2,0,0,0,0,5,0,13,12,0,1,35,53,62,89,321,299,34,22,16,39,18,5,3,2,3,0,2,0,0,0,0,0,0,0,0,0,0,0,0],[21,0,0,13,32,16,15,8,0,2,14,132,156,261,106,149,39,49,17,1,42,51,41,0,0,3,0,0,2,0,0,0,0,0,0,0,0,0,0,0],[18,0,0,82,191,68,5,5,4,14,8,7,0,10,6,37,83,34,16,18,10,13,41,48,15,6,0,0,1,0,0,0,0,0,0,0,0,0,0,0],[7,0,25,334,392,246,1,0,17,12,6,0,0,0,0,25,34,12,5,3,5,29,86,45,9,6,0,0,0,1,0,0,0,0,0,0,0,0,0,0],[10,0,17,59,207,156,50,7,6,2,10,0,0,0,0,3,2,4,3,1,4,2,2,0,0,2,2,0,0,2,0,0,0,0,0,0,0,0,0,0],[10,0,28,116,54,94,63,34,14,23,0,2,9,0,2,13,5,0,2,2,0,0,8,9,1,0,3,0,0,3,0,0,0,0,0,0,0,0,0,0],[16,0,17,6,57,40,25,7,0,5,5,13,3,5,3,8,0,0,1,2,0,0,0,9,6,6,0,3,4,3,0,0,0,0,0,0,0,0,0,0],[17,0,10,9,0,6,20,38,0,0,0,9,4,1,0,0,0,0,1,1,0,6,0,5,3,6,5,1,14,10,2,0,0,0,0,10,8,0,0,0],[18,0,0,0,0,6,2,58,48,0,9,0,0,4,1,0,0,0,2,2,0,5,3,0,0,0,11,11,10,0,5,0,0,0,0,0,12,0,0,0],[17,0,0,0,0,5,8,39,8,7,7,0,0,0,5,7,6,5,10,6,6,4,0,3,0,0,0,0,0,2,11,5,0,0,0,0,8,0,0,0],[17,0,0,0,0,9,8,0,3,11,0,0,0,0,0,0,0,0,4,0,0,0,0,0,2,1,0,0,0,0,1,5,0,0,0,0,6,0,0,0],[22,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,1,1,2,1,1,4,3,0,0,7,0,0,0],[185,14,13,49,18,17,19,15,5,6,325,2,1,6,30,27,27,53,3,0,0,0,0,0,0,0,0,0,0,0,0,2,4,6,11,12,11,8,5,7]],"heat_seconds":275.7833},{"id":"P_4","team":"T_2","move":{"team":"T_2","tracked":0.7922,"interpolated":0.0637,"distance_m":287.4039,"distance_in_rallies_m":257.1055,"top_speed_ms":9.0937,"sprints":9,"avg_dist_to_net_m":5.3314,"time_at_net":0.3504,"time_in_middle":0.3503,"time_at_back":0.2993,"court_coverage":0.48,"time_left_side":0.0628},"shots":{"shots":7,"by_type":{"serve":0,"drive":4,"lob":0,"volley":0,"bandeja_vibora":0,"smash":1,"bajada":0,"chiquita":0,"other":2},"attacking_share":0.143,"avg_speed_kmh":45.28,"max_speed_kmh":89.2,"avg_contact_height_m":1.0,"direction":{"cross":0,"middle":1,"line":3},"from_zone":{"net":1,"middle":2,"back":4},"deep_share":0.0,"targets":{"P_1":4},"winners":0,"errors":1},"heat":[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,35,46,27,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8,25,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,15,0,0,11,6,3,0,0,0,0,0,0,0,0,0,0,0,0,2,57,15,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,4,0,0,0,0,24,9,0,0,0,0,0,39,0,0,0,0,5,2,0,4,3,0],[14,0,0,0,0,0,0,0,0,0,0,0,0,4,4,24,6,0,0,0,0,0,0,3,0,0,0,0,14,36,0,0,0,0,7,13,5,8,7,0],[5,0,0,0,0,0,0,0,0,0,0,0,4,24,5,0,0,0,0,0,0,0,0,1,0,0,0,0,0,5,0,0,0,0,7,0,6,12,4,0],[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,34,50,0,0,0,0,3,0,0,0,16,5,0,5,2,0,0],[11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,25,50,4,8,28,4,8,0,0,0,7,7,12,7,4,0,0],[15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,17,16,8,161,41,92,36,0,9,13,5,10,0,0,1,2,0],[8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,15,64,14,98,143,158,84,37,6,0,9,9,0,0,1,2,0],[10,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,15,47,67,154,84,14,33,7,0,10,0,0,0,0,4,0],[12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,63,26,15,132,80,107,32,46,0,0,9,0,0,0,0,5,0],[7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,29,39,51,39,92,143,19,0,12,9,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,35,35,119,56,27,132,27,8,0,11,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,9,29,41,58,155,64,61,9,20,6,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,9,6,64,28,44,393,17,10,28,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,5,30,5,42,66,47,157,24,2,19,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,5,8,60,143,50,90,27,22,21,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,5,0,11,28,15,106,57,70,27,23,2,12,7,7,15,3,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,11,14,41,36,71,67,65,55,8,4,8,5,0,0,3,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,17,5,11,18,70,68,98,38,11,0,0,3,1,0,2,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,11,2,12,10,74,38,47,25,12,0,0,0,5,0,2,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,0,2,0,1,2,11,26,4,31,89,24,37,0,0,0,0,1,4,2,1,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,2,6,2,0,2,1,13,8,4,47,60,11,28,0,0,0,0,0,3,1,5,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,3,0,0,3,1,7,6,12,34,49,6,28,0,0,0,0,0,0,2,4,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,17,2,0,0,2,9,0,2,7,4,1,25,39,5,24,13,0,0,0,0,0,3,9,0,0],[1,0,0,0,0,0,0,0,0,0,0,0,0,0,18,1,0,0,0,1,0,0,1,7,16,0,40,84,8,40,14,29,17,0,0,0,0,1,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,18,0,0,0,0,2,0,1,18,29,29,24,126,195,447,326,125,80,34,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,32,33,5,1,0,0,18,1,8,37,164,58,0,54,166,232,148,37,6,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,37,80,3,4,2,0,1,11,46,29,109,41,1,17,64,106,94,36,4,2,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,15,11,7,1,3,2,2,0,4,14,25,24,2,28,42,103,103,60,18,2,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,7,8,0,3,3,3,0,4,0,52,44,24,70,64,73,78,34,2,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,2,21,8,2,5,14,7,9,8,16,28,86,43,49,249,126,27,22,10,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,7,18,11,5,0,0,3,0,0,3,52,15,28,180,293,56,17,53,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,13,0,2,0,0,3,4,3,0,0,0,3,0,0,4,5,2,22,54,243,38,5,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,12,0,1,0,0,2,0,0,0,0,0,5,0,0,4,5,2,28,28,83,101,71,1,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,16,0,1,0,2,1,0,0,0,0,0,3,0,0,5,7,3,10,37,19,160,44,3,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,2,3,4,14,0,1,0,3,0,0,0,0,0,0,3,2,0,5,0,10,2,23,16,26,8,7,0,0,0,0,0,0],[0,0,0,0,0,0,2,1,0,0,0,2,0,6,2,0,0,0,0,0,0,0,0,4,0,0,0,9,0,9,13,2,0,6,0,0,0,0,0,0],[0,0,1,1,2,1,0,0,1,1,2,3,3,4,0,0,0,0,0,0,0,0,0,9,0,0,0,8,0,10,10,2,0,0,0,0,0,0,0,0],[11,5,2,2,1,1,1,1,0,0,4,3,8,1,0,0,0,0,0,0,0,0,0,24,0,0,0,7,0,0,3,2,0,0,0,0,0,0,0,0]],"heat_seconds":251.7167}],"teams":[{"id":"T_1","players":["P_1","P_2"],"move":{"players":["P_1","P_2"],"both_at_net":0.0371,"both_at_back":0.1673,"split":0.2767,"in_transition":0.5189,"avg_partner_distance_m":4.9629,"side_by_side":0.4052,"depth_sync":-0.0796,"net_lost":1,"net_regained":2,"median_time_to_regain_s":10.95},"shots":{"shots":47,"by_type":{"serve":1,"drive":20,"lob":6,"volley":3,"bandeja_vibora":8,"smash":1,"bajada":0,"chiquita":0,"other":8},"attacking_share":0.255,"avg_speed_kmh":42.35,"max_speed_kmh":125.5,"avg_contact_height_m":1.34,"direction":{"cross":7,"middle":11,"line":6},"from_zone":{"net":16,"middle":10,"back":21},"deep_share":0.154,"targets":{"P_3":12,"P_4":4},"winners":1,"errors":1}},{"id":"T_2","players":["P_3","P_4"],"move":{"players":["P_3","P_4"],"both_at_net":0.1464,"both_at_back":0.0889,"split":0.2131,"in_transition":0.5515,"avg_partner_distance_m":4.6946,"side_by_side":0.4843,"depth_sync":0.1464,"net_lost":5,"net_regained":1,"median_time_to_regain_s":19.0167},"shots":{"shots":35,"by_type":{"serve":1,"drive":17,"lob":2,"volley":3,"bandeja_vibora":3,"smash":1,"bajada":1,"chiquita":1,"other":6},"attacking_share":0.229,"avg_speed_kmh":52.59,"max_speed_kmh":89.2,"avg_contact_height_m":1.13,"direction":{"cross":9,"middle":5,"line":10},"from_zone":{"net":10,"middle":8,"back":17},"deep_share":0.091,"targets":{"P_2":11,"P_1":8},"winners":1,"errors":1}}],"movement_rallies":[{"start_s":0.0333,"end_s":4.2,"duration_s":4.1833},{"start_s":17.8,"end_s":22.3833,"duration_s":4.6},{"start_s":29.8333,"end_s":34.55,"duration_s":4.7333},{"start_s":38.3,"end_s":50.3833,"duration_s":12.1},{"start_s":53.5333,"end_s":93.5833,"duration_s":40.0667},{"start_s":101.9333,"end_s":117.1333,"duration_s":15.2167},{"start_s":122.9833,"end_s":166.5333,"duration_s":43.5667},{"start_s":175.6667,"end_s":205.0833,"duration_s":29.4333},{"start_s":208.1667,"end_s":218.05,"duration_s":9.9},{"start_s":221.5667,"end_s":249.8833,"duration_s":28.3333},{"start_s":252.4667,"end_s":266.9833,"duration_s":14.5333},{"start_s":272.15,"end_s":285.3667,"duration_s":13.2333},{"start_s":291.0,"end_s":296.2,"duration_s":5.2167},{"start_s":308.3167,"end_s":333.95,"duration_s":25.65},{"start_s":336.6667,"end_s":341.55,"duration_s":4.9},{"start_s":347.05,"end_s":352.0333,"duration_s":5.0},{"start_s":355.85,"end_s":360.7,"duration_s":4.8667},{"start_s":369.3,"end_s":377.35,"duration_s":8.0667},{"start_s":400.5,"end_s":411.6833,"duration_s":11.2},{"start_s":416.95,"end_s":422.8333,"duration_s":5.9}],"match":{"rallies":18,"shots":82,"avg_rally_shots":5.12,"avg_rally_s":16.46,"longest_rally_shots":14,"longest_rally_s":49.1,"time_in_play_s":296.2},"rallies":[{"rally":0,"start_s":0.5667,"end_s":11.4667,"duration_s":10.9,"shots":2,"last_player":"P_2","last_type":"drive","outcome":"unknown"},{"rally":1,"start_s":19.5833,"end_s":28.8,"duration_s":9.2167,"shots":0,"last_player":null,"last_type":null,"outcome":"unknown"},{"rally":2,"start_s":34.1833,"end_s":68.0167,"duration_s":33.8333,"shots":12,"last_player":"P_1","last_type":"drive","outcome":"unknown"},{"rally":3,"start_s":74.8167,"end_s":82.1167,"duration_s":7.3,"shots":3,"last_player":"P_2","last_type":"bandeja_vibora","outcome":"error"},{"rally":4,"start_s":87.4667,"end_s":97.4833,"duration_s":10.0167,"shots":5,"last_player":"P_4","last_type":"drive","outcome":"error"},{"rally":5,"start_s":103.4833,"end_s":144.3167,"duration_s":40.8333,"shots":9,"last_player":"P_3","last_type":"drive","outcome":"unknown"},{"rally":6,"start_s":156.4,"end_s":160.8833,"duration_s":4.4833,"shots":2,"last_player":"P_1","last_type":"volley","outcome":"unknown"},{"rally":7,"start_s":169.3667,"end_s":218.5167,"duration_s":49.15,"shots":14,"last_player":"P_3","last_type":"drive","outcome":"winner"},{"rally":8,"start_s":223.1667,"end_s":241.3,"duration_s":18.1333,"shots":4,"last_player":"P_1","last_type":"drive","outcome":"unknown"},{"rally":9,"start_s":245.8833,"end_s":247.5667,"duration_s":1.6833,"shots":2,"last_player":"P_1","last_type":"drive","outcome":"unknown"},{"rally":10,"start_s":256.5333,"end_s":263.2167,"duration_s":6.6833,"shots":3,"last_player":"P_3","last_type":"volley","outcome":"unknown"},{"rally":11,"start_s":268.6833,"end_s":306.5167,"duration_s":37.8333,"shots":10,"last_player":"P_1","last_type":"drive","outcome":"unknown"},{"rally":12,"start_s":315.4833,"end_s":319.4833,"duration_s":4.0,"shots":3,"last_player":"P_2","last_type":"drive","outcome":"unknown"},{"rally":13,"start_s":324.5333,"end_s":330.3167,"duration_s":5.7833,"shots":2,"last_player":"P_2","last_type":"drive","outcome":"unknown"},{"rally":14,"start_s":335.0,"end_s":376.15,"duration_s":41.15,"shots":7,"last_player":"P_2","last_type":"lob","outcome":"unknown"},{"rally":15,"start_s":382.3167,"end_s":382.4167,"duration_s":0.1,"shots":1,"last_player":"P_1","last_type":"other","outcome":"unknown"},{"rally":16,"start_s":402.8333,"end_s":414.4333,"duration_s":11.6,"shots":3,"last_player":"P_1","last_type":"bandeja_vibora","outcome":"winner"},{"rally":17,"start_s":419.2667,"end_s":422.7833,"duration_s":3.5167,"shots":0,"last_player":null,"last_type":null,"outcome":"unknown"}],"shots":[{"index":0,"time_s":0.5667,"rally":0,"player":"P_3","team":"T_2","type":"other","speed_kmh":null,"speed_source":null,"contact_height_m":0.06,"contact":[0.947,19.0861],"depth_m":9.09,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":"cross","target":"P_2","wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":1,"time_s":5.6542,"rally":0,"player":"P_2","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.24,"contact":[6.6119,2.6815],"depth_m":7.32,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"wall","direction":null,"target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"medium"},{"index":2,"time_s":34.1833,"rally":2,"player":"P_4","team":"T_2","type":"other","speed_kmh":25.6,"speed_source":"3d","contact_height_m":0.3,"contact":[2.7155,10.8463],"depth_m":0.85,"zone":"net","landing":null,"landing_source":null,"apex_m":0.41,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":3,"time_s":37.5167,"rally":2,"player":"P_3","team":"T_2","type":"drive","speed_kmh":37.0,"speed_source":"3d","contact_height_m":1.53,"contact":[6.9004,17.1218],"depth_m":7.12,"zone":"back","landing":null,"landing_source":null,"apex_m":1.16,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"medium"},{"index":4,"time_s":39.5667,"rally":2,"player":"P_3","team":"T_2","type":"drive","speed_kmh":73.0,"speed_source":"3d","contact_height_m":0.73,"contact":[6.626,16.8878],"depth_m":6.89,"zone":"middle","landing":[1.2615,5.0806],"landing_source":"2d","apex_m":1.15,"air_time_s":0.87,"before":"bounce","direction":"cross","target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"high"},{"index":5,"time_s":41.7792,"rally":2,"player":"P_4","team":"T_2","type":"smash","speed_kmh":89.2,"speed_source":"3d","contact_height_m":1.84,"contact":[2.145,14.2314],"depth_m":4.23,"zone":"middle","landing":null,"landing_source":null,"apex_m":3.08,"air_time_s":null,"before":"bounce","direction":"line","target":"P_1","wall_after":false,"attacking":true,"overhead":true,"confidence":"high"},{"index":6,"time_s":42.9833,"rally":2,"player":"P_1","team":"T_1","type":"drive","speed_kmh":27.8,"speed_source":"2d","contact_height_m":0.8,"contact":[2.2744,2.8131],"depth_m":7.19,"zone":"back","landing":[2.9908,11.4319],"landing_source":"2d","apex_m":null,"air_time_s":1.12,"before":null,"direction":"line","target":"P_3","wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":7,"time_s":48.3917,"rally":2,"player":"P_3","team":"T_2","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":0.87,"contact":[5.5252,16.5725],"depth_m":6.57,"zone":"middle","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"bounce","direction":null,"target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"medium"},{"index":8,"time_s":54.8375,"rally":2,"player":"P_3","team":"T_2","type":"drive","speed_kmh":50.5,"speed_source":"2d","contact_height_m":0.91,"contact":[4.3776,17.2453],"depth_m":7.25,"zone":"back","landing":[8.5833,3.6662],"landing_source":"2d","apex_m":null,"air_time_s":1.01,"before":"wall","direction":"cross","target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"medium"},{"index":9,"time_s":57.1125,"rally":2,"player":"P_3","team":"T_2","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.66,"contact":[5.8288,13.2935],"depth_m":3.29,"zone":"net","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"wall","direction":"line","target":"P_2","wall_after":false,"attacking":false,"overhead":false,"confidence":"medium"},{"index":10,"time_s":58.3667,"rally":2,"player":"P_2","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":0.93,"contact":[8.4803,3.0458],"depth_m":6.95,"zone":"middle","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":11,"time_s":60.9292,"rally":2,"player":"P_2","team":"T_1","type":"other","speed_kmh":35.3,"speed_source":"3d","contact_height_m":0.92,"contact":[7.4233,4.6371],"depth_m":5.36,"zone":"middle","landing":null,"landing_source":null,"apex_m":2.11,"air_time_s":null,"before":null,"direction":"middle","target":"P_3","wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":12,"time_s":61.8167,"rally":2,"player":"P_3","team":"T_2","type":"volley","speed_kmh":67.3,"speed_source":"2d","contact_height_m":1.6,"contact":[5.6723,12.2293],"depth_m":2.23,"zone":"net","landing":[7.4647,7.8301],"landing_source":"2d","apex_m":null,"air_time_s":0.25,"before":null,"direction":"line","target":"P_1","wall_after":true,"attacking":true,"overhead":false,"confidence":"low"},{"index":13,"time_s":67.1333,"rally":2,"player":"P_1","team":"T_1","type":"drive","speed_kmh":19.8,"speed_source":"3d","contact_height_m":1.11,"contact":[3.7352,2.3149],"depth_m":7.69,"zone":"back","landing":null,"landing_source":null,"apex_m":1.09,"air_time_s":null,"before":"wall","direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"high"},{"index":14,"time_s":74.8167,"rally":3,"player":"P_1","team":"T_1","type":"serve","speed_kmh":74.7,"speed_source":"3d","contact_height_m":1.28,"contact":[3.6608,1.8911],"depth_m":8.11,"zone":"back","landing":[5.7104,16.3773],"landing_source":"3d","apex_m":1.22,"air_time_s":null,"before":"serve","direction":"middle","target":"P_3","wall_after":true,"attacking":false,"overhead":false,"confidence":"high"},{"index":15,"time_s":75.8,"rally":3,"player":"P_3","team":"T_2","type":"lob","speed_kmh":null,"speed_source":null,"contact_height_m":1.35,"contact":[7.2494,18.272],"depth_m":8.27,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":"middle","target":"P_2","wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":16,"time_s":77.5792,"rally":3,"player":"P_2","team":"T_1","type":"bandeja_vibora","speed_kmh":20.4,"speed_source":"3d","contact_height_m":1.99,"contact":[5.9042,7.7323],"depth_m":2.27,"zone":"net","landing":null,"landing_source":null,"apex_m":2.63,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":true,"attacking":true,"overhead":true,"confidence":"medium"},{"index":17,"time_s":87.4667,"rally":4,"player":"P_1","team":"T_1","type":"other","speed_kmh":118.9,"speed_source":"3d","contact_height_m":1.51,"contact":[5.4515,1.8984],"depth_m":8.1,"zone":"back","landing":null,"landing_source":null,"apex_m":1.05,"air_time_s":null,"before":null,"direction":"cross","target":"P_4","wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":18,"time_s":87.8458,"rally":4,"player":"P_4","team":"T_2","type":"drive","speed_kmh":13.3,"speed_source":"3d","contact_height_m":0.93,"contact":[2.3462,18.4766],"depth_m":8.48,"zone":"back","landing":null,"landing_source":null,"apex_m":0.6,"air_time_s":null,"before":null,"direction":"middle","target":"P_1","wall_after":false,"attacking":false,"overhead":false,"confidence":"medium"},{"index":19,"time_s":88.375,"rally":4,"player":"P_1","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.62,"contact":[4.8495,3.0244],"depth_m":6.98,"zone":"middle","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":20,"time_s":92.1792,"rally":4,"player":"P_1","team":"T_1","type":"volley","speed_kmh":null,"speed_source":null,"contact_height_m":0.97,"contact":[2.512,6.1247],"depth_m":3.88,"zone":"net","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":"line","target":"P_4","wall_after":true,"attacking":true,"overhead":false,"confidence":"low"},{"index":21,"time_s":95.05,"rally":4,"player":"P_4","team":"T_2","type":"drive","speed_kmh":52.4,"speed_source":"3d","contact_height_m":0.45,"contact":[3.3947,17.4159],"depth_m":7.42,"zone":"back","landing":null,"landing_source":null,"apex_m":1.46,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"medium"},{"index":22,"time_s":105.3833,"rally":5,"player":"P_4","team":"T_2","type":"other","speed_kmh":45.9,"speed_source":"3d","contact_height_m":1.44,"contact":[1.8966,14.5709],"depth_m":4.57,"zone":"middle","landing":[2.3871,4.6772],"landing_source":"3d","apex_m":1.11,"air_time_s":null,"before":null,"direction":"line","target":"P_1","wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":23,"time_s":106.3375,"rally":5,"player":"P_1","team":"T_1","type":"drive","speed_kmh":50.5,"speed_source":"3d","contact_height_m":0.97,"contact":[2.5003,1.9054],"depth_m":8.09,"zone":"back","landing":null,"landing_source":null,"apex_m":1.61,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"medium"},{"index":24,"time_s":108.1792,"rally":5,"player":"P_2","team":"T_1","type":"other","speed_kmh":null,"speed_source":null,"contact_height_m":1.66,"contact":[6.9256,5.3048],"depth_m":4.7,"zone":"middle","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":"middle","target":"P_3","wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":25,"time_s":108.8,"rally":5,"player":"P_3","team":"T_2","type":"volley","speed_kmh":63.8,"speed_source":"3d","contact_height_m":1.4,"contact":[5.6544,13.9831],"depth_m":3.98,"zone":"net","landing":null,"landing_source":null,"apex_m":1.63,"air_time_s":null,"before":null,"direction":"line","target":"P_2","wall_after":true,"attacking":true,"overhead":false,"confidence":"medium"},{"index":26,"time_s":109.6958,"rally":5,"player":"P_2","team":"T_1","type":"volley","speed_kmh":null,"speed_source":null,"contact_height_m":1.66,"contact":[7.2408,5.4999],"depth_m":4.5,"zone":"middle","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"volley","direction":null,"target":null,"wall_after":true,"attacking":true,"overhead":false,"confidence":"medium"},{"index":27,"time_s":128.25,"rally":5,"player":"P_2","team":"T_1","type":"lob","speed_kmh":11.4,"speed_source":"2d","contact_height_m":1.36,"contact":[7.7298,2.5012],"depth_m":7.5,"zone":"back","landing":[4.116,19.1059],"landing_source":"2d","apex_m":null,"air_time_s":5.36,"before":"wall","direction":"middle","target":"P_3","wall_after":true,"attacking":false,"overhead":false,"confidence":"medium"},{"index":28,"time_s":134.6167,"rally":5,"player":"P_3","team":"T_2","type":"bajada","speed_kmh":68.0,"speed_source":"3d","contact_height_m":1.66,"contact":[4.349,17.5181],"depth_m":7.52,"zone":"back","landing":[6.9776,6.4327],"landing_source":"2d","apex_m":1.51,"air_time_s":0.92,"before":"wall","direction":"cross","target":"P_2","wall_after":false,"attacking":true,"overhead":false,"confidence":"high"},{"index":29,"time_s":135.9833,"rally":5,"player":"P_2","team":"T_1","type":"drive","speed_kmh":72.3,"speed_source":"3d","contact_height_m":1.15,"contact":[7.1418,2.0761],"depth_m":7.92,"zone":"back","landing":null,"landing_source":null,"apex_m":1.41,"air_time_s":null,"before":"bounce","direction":"middle","target":"P_3","wall_after":true,"attacking":false,"overhead":false,"confidence":"high"},{"index":30,"time_s":136.7417,"rally":5,"player":"P_3","team":"T_2","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":0.42,"contact":[5.8864,16.611],"depth_m":6.61,"zone":"middle","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":31,"time_s":157.5875,"rally":6,"player":"P_3","team":"T_2","type":"other","speed_kmh":60.3,"speed_source":"3d","contact_height_m":0.56,"contact":[8.4007,18.6301],"depth_m":8.63,"zone":"back","landing":null,"landing_source":null,"apex_m":2.73,"air_time_s":null,"before":null,"direction":"middle","target":"P_1","wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":32,"time_s":158.7958,"rally":6,"player":"P_1","team":"T_1","type":"volley","speed_kmh":82.9,"speed_source":"2d","contact_height_m":1.19,"contact":[5.1707,7.6447],"depth_m":2.36,"zone":"net","landing":[3.7339,14.4976],"landing_source":"2d","apex_m":null,"air_time_s":0.3,"before":null,"direction":"cross","target":null,"wall_after":false,"attacking":true,"overhead":false,"confidence":"low"},{"index":33,"time_s":170.1167,"rally":7,"player":"P_1","team":"T_1","type":"other","speed_kmh":29.2,"speed_source":"3d","contact_height_m":1.28,"contact":[2.5714,6.8667],"depth_m":3.13,"zone":"net","landing":null,"landing_source":null,"apex_m":1.29,"air_time_s":null,"before":null,"direction":"line","target":"P_4","wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":34,"time_s":170.7042,"rally":7,"player":"P_4","team":"T_2","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":0.72,"contact":[2.6241,18.4051],"depth_m":8.41,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":"line","target":"P_1","wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":35,"time_s":171.55,"rally":7,"player":"P_1","team":"T_1","type":"bandeja_vibora","speed_kmh":4.5,"speed_source":"2d","contact_height_m":2.11,"contact":[2.8454,7.1384],"depth_m":2.86,"zone":"net","landing":[3.5211,13.3063],"landing_source":"2d","apex_m":null,"air_time_s":4.97,"before":null,"direction":"line","target":null,"wall_after":false,"attacking":true,"overhead":true,"confidence":"low"},{"index":36,"time_s":178.0792,"rally":7,"player":"P_2","team":"T_1","type":"lob","speed_kmh":97.9,"speed_source":"3d","contact_height_m":1.05,"contact":[6.89,1.8837],"depth_m":8.12,"zone":"back","landing":[3.6595,13.4136],"landing_source":"2d","apex_m":1.75,"air_time_s":1.91,"before":"bounce","direction":"cross","target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"high"},{"index":37,"time_s":180.45,"rally":7,"player":"P_1","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.47,"contact":[3.8095,7.3472],"depth_m":2.65,"zone":"net","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"bounce","direction":"cross","target":"P_3","wall_after":true,"attacking":false,"overhead":false,"confidence":"medium"},{"index":38,"time_s":184.0833,"rally":7,"player":"P_3","team":"T_2","type":"drive","speed_kmh":20.2,"speed_source":"3d","contact_height_m":1.66,"contact":[9.2187,11.223],"depth_m":1.22,"zone":"net","landing":[0.0493,9.7465],"landing_source":"3d","apex_m":0.98,"air_time_s":null,"before":"bounce","direction":"cross","target":"P_2","wall_after":false,"attacking":false,"overhead":false,"confidence":"high"},{"index":39,"time_s":185.675,"rally":7,"player":"P_2","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.66,"contact":[7.3337,2.9933],"depth_m":7.01,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":40,"time_s":189.0167,"rally":7,"player":"P_1","team":"T_1","type":"lob","speed_kmh":7.2,"speed_source":"2d","contact_height_m":0.69,"contact":[8.2098,7.2753],"depth_m":2.72,"zone":"net","landing":[6.5337,20.0027],"landing_source":"2d","apex_m":null,"air_time_s":6.4,"before":null,"direction":"line","target":"P_3","wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":41,"time_s":196.05,"rally":7,"player":"P_3","team":"T_2","type":"drive","speed_kmh":9.5,"speed_source":"3d","contact_height_m":0.4,"contact":[6.9875,17.1011],"depth_m":7.1,"zone":"back","landing":null,"landing_source":null,"apex_m":1.35,"air_time_s":null,"before":"wall","direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"high"},{"index":42,"time_s":198.5667,"rally":7,"player":"P_3","team":"T_2","type":"chiquita","speed_kmh":47.6,"speed_source":"2d","contact_height_m":0.63,"contact":[6.9295,17.0438],"depth_m":7.04,"zone":"back","landing":[1.4923,5.9151],"landing_source":"2d","apex_m":null,"air_time_s":0.94,"before":"bounce","direction":"cross","target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"medium"},{"index":43,"time_s":200.9,"rally":7,"player":"P_3","team":"T_2","type":"drive","speed_kmh":82.8,"speed_source":"3d","contact_height_m":1.45,"contact":[5.2263,13.5221],"depth_m":3.52,"zone":"net","landing":null,"landing_source":null,"apex_m":1.59,"air_time_s":null,"before":"wall","direction":"line","target":"P_2","wall_after":true,"attacking":false,"overhead":false,"confidence":"high"},{"index":44,"time_s":201.3167,"rally":7,"player":"P_2","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.16,"contact":[6.7945,2.4825],"depth_m":7.52,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":45,"time_s":203.75,"rally":7,"player":"P_1","team":"T_1","type":"drive","speed_kmh":42.9,"speed_source":"3d","contact_height_m":1.11,"contact":[3.4684,4.3362],"depth_m":5.66,"zone":"middle","landing":[6.4432,16.9425],"landing_source":"3d","apex_m":3.98,"air_time_s":null,"before":"bounce","direction":"cross","target":"P_3","wall_after":true,"attacking":false,"overhead":false,"confidence":"high"},{"index":46,"time_s":209.4542,"rally":7,"player":"P_3","team":"T_2","type":"drive","speed_kmh":67.2,"speed_source":"3d","contact_height_m":0.66,"contact":[4.1323,17.3328],"depth_m":7.33,"zone":"back","landing":[9.0193,4.1486],"landing_source":"2d","apex_m":1.29,"air_time_s":0.9,"before":null,"direction":"cross","target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"medium"},{"index":47,"time_s":227.0792,"rally":8,"player":"P_3","team":"T_2","type":"serve","speed_kmh":55.2,"speed_source":"3d","contact_height_m":1.21,"contact":[8.8032,17.8521],"depth_m":7.85,"zone":"back","landing":null,"landing_source":null,"apex_m":1.41,"air_time_s":null,"before":"serve","direction":"line","target":"P_2","wall_after":true,"attacking":false,"overhead":false,"confidence":"high"},{"index":48,"time_s":234.3542,"rally":8,"player":"P_2","team":"T_1","type":"lob","speed_kmh":36.2,"speed_source":"3d","contact_height_m":1.27,"contact":[6.909,8.2049],"depth_m":1.8,"zone":"net","landing":null,"landing_source":null,"apex_m":5.13,"air_time_s":null,"before":"wall","direction":null,"target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"high"},{"index":49,"time_s":236.3208,"rally":8,"player":"P_1","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.11,"contact":[2.521,3.8992],"depth_m":6.1,"zone":"middle","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":50,"time_s":241.2458,"rally":8,"player":"P_1","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.0,"contact":[2.8475,5.3806],"depth_m":4.62,"zone":"middle","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"wall","direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"medium"},{"index":51,"time_s":245.8833,"rally":9,"player":"P_3","team":"T_2","type":"other","speed_kmh":36.0,"speed_source":"2d","contact_height_m":1.66,"contact":[6.0824,14.1396],"depth_m":4.14,"zone":"middle","landing":[2.8409,8.8965],"landing_source":"2d","apex_m":null,"air_time_s":0.62,"before":null,"direction":"cross","target":"P_1","wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":52,"time_s":247.5167,"rally":9,"player":"P_1","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":0.88,"contact":[4.4422,2.8109],"depth_m":7.19,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"bounce","direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"medium"},{"index":53,"time_s":256.9167,"rally":10,"player":"P_1","team":"T_1","type":"other","speed_kmh":null,"speed_source":null,"contact_height_m":1.66,"contact":[5.998,2.2006],"depth_m":7.8,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":54,"time_s":260.4,"rally":10,"player":"P_1","team":"T_1","type":"lob","speed_kmh":44.7,"speed_source":"3d","contact_height_m":1.37,"contact":[3.5969,2.8309],"depth_m":7.17,"zone":"back","landing":null,"landing_source":null,"apex_m":5.25,"air_time_s":null,"before":null,"direction":"middle","target":"P_3","wall_after":false,"attacking":false,"overhead":false,"confidence":"medium"},{"index":55,"time_s":262.3208,"rally":10,"player":"P_3","team":"T_2","type":"volley","speed_kmh":null,"speed_source":null,"contact_height_m":0.67,"contact":[5.9214,12.5643],"depth_m":2.56,"zone":"net","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":false,"attacking":true,"overhead":false,"confidence":"low"},{"index":56,"time_s":268.6833,"rally":11,"player":"P_3","team":"T_2","type":"other","speed_kmh":64.9,"speed_source":"3d","contact_height_m":1.48,"contact":[6.0114,12.1732],"depth_m":2.17,"zone":"net","landing":[-0.0194,1.4579],"landing_source":"3d","apex_m":1.68,"air_time_s":null,"before":null,"direction":"cross","target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":57,"time_s":272.4583,"rally":11,"player":"P_3","team":"T_2","type":"bandeja_vibora","speed_kmh":null,"speed_source":null,"contact_height_m":1.97,"contact":[5.9911,12.9812],"depth_m":2.98,"zone":"net","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":true,"attacking":true,"overhead":true,"confidence":"low"},{"index":58,"time_s":278.2083,"rally":11,"player":"P_3","team":"T_2","type":"bandeja_vibora","speed_kmh":82.7,"speed_source":"3d","contact_height_m":1.85,"contact":[5.9744,12.6858],"depth_m":2.69,"zone":"net","landing":null,"landing_source":null,"apex_m":2.4,"air_time_s":null,"before":null,"direction":"line","target":"P_2","wall_after":false,"attacking":true,"overhead":true,"confidence":"medium"},{"index":59,"time_s":278.5333,"rally":11,"player":"P_2","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.08,"contact":[7.0056,3.846],"depth_m":6.15,"zone":"middle","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":60,"time_s":280.0958,"rally":11,"player":"P_2","team":"T_1","type":"bandeja_vibora","speed_kmh":null,"speed_source":null,"contact_height_m":1.75,"contact":[6.8391,2.3592],"depth_m":7.64,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":"middle","target":"P_4","wall_after":true,"attacking":true,"overhead":true,"confidence":"low"},{"index":61,"time_s":284.0,"rally":11,"player":"P_4","team":"T_2","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.35,"contact":[4.3992,17.0301],"depth_m":7.03,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":62,"time_s":293.5333,"rally":11,"player":"P_3","team":"T_2","type":"bandeja_vibora","speed_kmh":null,"speed_source":null,"contact_height_m":2.23,"contact":[5.6042,15.923],"depth_m":5.92,"zone":"middle","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"wall","direction":null,"target":null,"wall_after":false,"attacking":true,"overhead":true,"confidence":"medium"},{"index":63,"time_s":296.75,"rally":11,"player":"P_3","team":"T_2","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":0.66,"contact":[5.2317,16.6626],"depth_m":6.66,"zone":"middle","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"bounce","direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"medium"},{"index":64,"time_s":301.4833,"rally":11,"player":"P_3","team":"T_2","type":"lob","speed_kmh":41.3,"speed_source":"3d","contact_height_m":0.97,"contact":[6.4407,17.0309],"depth_m":7.03,"zone":"back","landing":[5.0144,5.6818],"landing_source":"2d","apex_m":5.11,"air_time_s":3.42,"before":null,"direction":"middle","target":"P_1","wall_after":true,"attacking":false,"overhead":false,"confidence":"medium"},{"index":65,"time_s":305.5292,"rally":11,"player":"P_1","team":"T_1","type":"drive","speed_kmh":17.8,"speed_source":"3d","contact_height_m":1.4,"contact":[4.0181,2.9297],"depth_m":7.07,"zone":"back","landing":null,"landing_source":null,"apex_m":2.46,"air_time_s":null,"before":"bounce","direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"high"},{"index":66,"time_s":315.4833,"rally":12,"player":"P_2","team":"T_1","type":"smash","speed_kmh":125.5,"speed_source":"3d","contact_height_m":1.75,"contact":[3.1158,1.8801],"depth_m":8.12,"zone":"back","landing":null,"landing_source":null,"apex_m":1.12,"air_time_s":null,"before":null,"direction":"cross","target":"P_3","wall_after":false,"attacking":true,"overhead":true,"confidence":"medium"},{"index":67,"time_s":315.7792,"rally":12,"player":"P_3","team":"T_2","type":"drive","speed_kmh":55.9,"speed_source":"3d","contact_height_m":0.88,"contact":[8.9587,17.7191],"depth_m":7.72,"zone":"back","landing":null,"landing_source":null,"apex_m":1.14,"air_time_s":null,"before":null,"direction":"middle","target":"P_2","wall_after":true,"attacking":false,"overhead":false,"confidence":"medium"},{"index":68,"time_s":318.1167,"rally":12,"player":"P_2","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.28,"contact":[5.5922,2.3313],"depth_m":7.67,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"wall","direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"medium"},{"index":69,"time_s":325.4083,"rally":13,"player":"P_2","team":"T_1","type":"other","speed_kmh":37.1,"speed_source":"3d","contact_height_m":1.66,"contact":[5.2344,1.8799],"depth_m":8.12,"zone":"back","landing":null,"landing_source":null,"apex_m":2.08,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":70,"time_s":326.6292,"rally":13,"player":"P_2","team":"T_1","type":"drive","speed_kmh":31.0,"speed_source":"2d","contact_height_m":1.43,"contact":[7.2021,1.8784],"depth_m":8.12,"zone":"back","landing":[4.3459,13.5508],"landing_source":"2d","apex_m":null,"air_time_s":1.4,"before":null,"direction":"middle","target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":71,"time_s":335.0,"rally":14,"player":"P_1","team":"T_1","type":"bandeja_vibora","speed_kmh":null,"speed_source":null,"contact_height_m":1.75,"contact":[3.8344,8.6494],"depth_m":1.35,"zone":"net","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":true,"attacking":true,"overhead":true,"confidence":"low"},{"index":72,"time_s":336.1375,"rally":14,"player":"P_1","team":"T_1","type":"bandeja_vibora","speed_kmh":null,"speed_source":null,"contact_height_m":1.82,"contact":[3.5683,8.3802],"depth_m":1.62,"zone":"net","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":false,"attacking":true,"overhead":true,"confidence":"low"},{"index":73,"time_s":338.275,"rally":14,"player":"P_1","team":"T_1","type":"bandeja_vibora","speed_kmh":4.1,"speed_source":"2d","contact_height_m":1.93,"contact":[3.8586,10.0046],"depth_m":0.0,"zone":"net","landing":[7.8991,4.0741],"landing_source":"2d","apex_m":null,"air_time_s":6.32,"before":null,"direction":"cross","target":null,"wall_after":true,"attacking":true,"overhead":true,"confidence":"low"},{"index":74,"time_s":346.6125,"rally":14,"player":"P_2","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":0.99,"contact":[8.939,7.0678],"depth_m":2.93,"zone":"net","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"wall","direction":"line","target":"P_3","wall_after":false,"attacking":false,"overhead":false,"confidence":"medium"},{"index":75,"time_s":349.7792,"rally":14,"player":"P_3","team":"T_2","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.55,"contact":[10.0,17.2725],"depth_m":7.27,"zone":"back","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"bounce","direction":"line","target":"P_2","wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":76,"time_s":349.9167,"rally":14,"player":"P_2","team":"T_1","type":"bandeja_vibora","speed_kmh":10.7,"speed_source":"2d","contact_height_m":2.29,"contact":[7.3223,6.331],"depth_m":3.67,"zone":"net","landing":[4.4986,10.1632],"landing_source":"2d","apex_m":null,"air_time_s":1.6,"before":"volley","direction":"middle","target":null,"wall_after":true,"attacking":true,"overhead":true,"confidence":"medium"},{"index":77,"time_s":359.9917,"rally":14,"player":"P_2","team":"T_1","type":"lob","speed_kmh":4.0,"speed_source":"2d","contact_height_m":0.39,"contact":[7.1423,8.0107],"depth_m":1.99,"zone":"net","landing":[5.5313,10.079],"landing_source":"2d","apex_m":null,"air_time_s":2.36,"before":"wall","direction":"middle","target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"medium"},{"index":78,"time_s":382.3167,"rally":15,"player":"P_1","team":"T_1","type":"other","speed_kmh":null,"speed_source":null,"contact_height_m":1.66,"contact":[4.5882,9.6796],"depth_m":0.32,"zone":"net","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":false,"attacking":false,"overhead":false,"confidence":"low"},{"index":79,"time_s":403.2833,"rally":16,"player":"P_1","team":"T_1","type":"other","speed_kmh":30.0,"speed_source":"3d","contact_height_m":0.46,"contact":[7.0753,5.9782],"depth_m":4.02,"zone":"middle","landing":null,"landing_source":null,"apex_m":2.95,"air_time_s":null,"before":null,"direction":null,"target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"low"},{"index":80,"time_s":406.1667,"rally":16,"player":"P_1","team":"T_1","type":"drive","speed_kmh":null,"speed_source":null,"contact_height_m":1.2,"contact":[7.1915,9.0377],"depth_m":0.96,"zone":"net","landing":null,"landing_source":null,"apex_m":null,"air_time_s":null,"before":"bounce","direction":null,"target":null,"wall_after":true,"attacking":false,"overhead":false,"confidence":"medium"},{"index":81,"time_s":410.2,"rally":16,"player":"P_1","team":"T_1","type":"bandeja_vibora","speed_kmh":64.3,"speed_source":"3d","contact_height_m":1.83,"contact":[6.1075,2.7585],"depth_m":7.24,"zone":"back","landing":[4.2047,12.3278],"landing_source":"2d","apex_m":2.24,"air_time_s":0.72,"before":"bounce","direction":"middle","target":null,"wall_after":true,"attacking":true,"overhead":true,"confidence":"high"}],"shot_types":["serve","drive","lob","volley","bandeja_vibora","smash","bajada","chiquita","other"],"shot_labels":{"serve":"Serve","drive":"Drive","lob":"Lob","volley":"Volley","bandeja_vibora":"Bandeja / v\u00edbora","smash":"Smash","bajada":"Bajada","chiquita":"Chiquita","other":"Other"},"attacking_types":["bajada","bandeja_vibora","smash","volley"],"timeline":{"dt":0.5,"activity":[0.6467,0.5389,0.4619,0.4042,0.3593,0.33,0.31,0.2333,0.1333,0.0333,0.0067,0.0067,0.0067,0.0067,0.0067,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0467,0.1033,0.1033,0.1033,0.1033,0.1033,0.1033,0.1033,0.1033,0.1033,0.07,0.0133,0.0133,0.0133,0.0133,0.0133,0.0133,0.0133,0.0133,0.0133,0.0467,0.0633,0.0633,0.0633,0.0667,0.1233,0.16,0.17,0.17,0.17,0.1233,0.1067,0.1067,0.1067,0.1033,0.0467,0.01,0.0,0.0,0.0,0.0,0.0467,0.13,0.17,0.25,0.3267,0.3267,0.3267,0.3267,0.3267,0.3267,0.28,0.22,0.2133,0.19,0.1233,0.1633,0.1767,0.1767,0.1767,0.1767,0.1767,0.1533,0.12,0.0633,0.1033,0.07,0.0567,0.0567,0.0567,0.0567,0.0567,0.1,0.19,0.19,0.14,0.16,0.2067,0.2667,0.3667,0.37,0.3867,0.35,0.3233,0.42,0.4467,0.4633,0.51,0.5333,0.47,0.4867,0.5667,0.6467,0.5867,0.49,0.4967,0.46,0.3667,0.2833,0.2467,0.2267,0.13,0.0433,0.04,0.0767,0.0967,0.1267,0.1467,0.1467,0.1467,0.1767,0.21,0.3,0.38,0.4433,0.4833,0.5367,0.6033,0.69,0.78,0.76,0.75,0.66,0.58,0.48,0.3867,0.2967,0.21,0.2033,0.1733,0.1633,0.14,0.1767,0.2033,0.2067,0.2933,0.3167,0.4167,0.4367,0.4433,0.4433,0.4433,0.4567,0.47,0.4667,0.38,0.3567,0.2567,0.19,0.1233,0.1233,0.1533,0.11,0.07,0.07,0.07,0.07,0.07,0.0367,0.0367,0.0367,0.0067,0.0,0.0,0.0,0.0,0.0,0.0,0.02,0.12,0.22,0.3133,0.35,0.42,0.5067,0.55,0.5867,0.6,0.58,0.48,0.38,0.3267,0.2967,0.2933,0.2067,0.1633,0.1267,0.1467,0.1867,0.2333,0.2967,0.2733,0.3033,0.24,0.24,0.24,0.24,0.2067,0.1667,0.12,0.0567,0.04,0.0033,0.0,0.0133,0.0133,0.0133,0.0133,0.0133,0.0133,0.0333,0.11,0.1133,0.14,0.1767,0.1767,0.1767,0.1767,0.1767,0.1767,0.1567,0.08,0.0767,0.05,0.0733,0.1267,0.13,0.23,0.3133,0.4133,0.4733,0.4733,0.51,0.55,0.4767,0.4967,0.58,0.48,0.41,0.3267,0.2667,0.2667,0.23,0.19,0.19,0.1167,0.09,0.19,0.2,0.2533,0.2833,0.31,0.3433,0.4167,0.49,0.51,0.45,0.35,0.3267,0.2567,0.2267,0.2,0.1667,0.1267,0.11,0.1567,0.2133,0.2133,0.25,0.26,0.26,0.26,0.26,0.2267,0.1933,0.21,0.2433,0.26,0.32,0.4033,0.5033,0.5933,0.6933,0.7567,0.79,0.7067,0.6167,0.6,0.5667,0.5067,0.4667,0.3767,0.2833,0.22,0.1633,0.1633,0.1633,0.1633,0.1,0.0667,0.0067,0.0067,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0533,0.0533,0.0533,0.0533,0.0533,0.0733,0.1733,0.2433,0.3133,0.3467,0.3267,0.4067,0.4733,0.5133,0.6,0.6633,0.6167,0.6267,0.5667,0.6333,0.7,0.71,0.7133,0.6733,0.5867,0.5033,0.45,0.4167,0.49,0.43,0.3467,0.2933,0.3133,0.3433,0.43,0.5067,0.57,0.5233,0.45,0.4633,0.4467,0.43,0.34,0.34,0.2533,0.1767,0.1133,0.1133,0.1033,0.1433,0.1667,0.1667,0.2267,0.1967,0.21,0.2467,0.2567,0.2567,0.2567,0.1633,0.17,0.17,0.11,0.11,0.11,0.0733,0.0633,0.0633,0.0633,0.0633,0.0733,0.1333,0.1333,0.1333,0.12,0.12,0.12,0.12,0.1533,0.1633,0.2233,0.2433,0.2467,0.2467,0.2467,0.2467,0.2467,0.2467,0.2133,0.2033,0.1033,0.0033,0.0,0.0,0.0,0.0467,0.0467,0.0933,0.1833,0.2067,0.2067,0.2067,0.2067,0.2067,0.2467,0.24,0.24,0.1933,0.1033,0.08,0.08,0.08,0.08,0.1033,0.1033,0.0767,0.16,0.2333,0.28,0.28,0.34,0.3567,0.3567,0.3333,0.31,0.3033,0.2367,0.1867,0.14,0.14,0.08,0.0633,0.15,0.1867,0.17,0.1633,0.1467,0.1233,0.1233,0.1233,0.1233,0.1233,0.0367,0.0533,0.12,0.2067,0.2067,0.2067,0.2067,0.2067,0.2067,0.2067,0.2067,0.1533,0.0867,0.0,0.0,0.0233,0.0333,0.1,0.1367,0.1367,0.2133,0.3033,0.3533,0.4167,0.4167,0.3933,0.3833,0.35,0.3467,0.3467,0.27,0.22,0.17,0.1733,0.2367,0.29,0.3567,0.3467,0.3433,0.38,0.38,0.34,0.34,0.2733,0.21,0.1567,0.09,0.0667,0.0367,0.0,0.0,0.0333,0.0333,0.0333,0.0333,0.0333,0.0767,0.15,0.15,0.15,0.1733,0.24,0.34,0.38,0.47,0.57,0.58,0.6067,0.7067,0.7667,0.7967,0.79,0.7333,0.7933,0.77,0.67,0.6167,0.5167,0.4167,0.3567,0.3033,0.21,0.1667,0.0667,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.01,0.02,0.0633,0.1067,0.1533,0.2133,0.2133,0.24,0.24,0.24,0.23,0.22,0.1767,0.1333,0.0867,0.0267,0.0267,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.03,0.03,0.03,0.03,0.03,0.03,0.03,0.03,0.03,0.03,0.0,0.0433,0.1433,0.1967,0.26,0.2767,0.2767,0.2767,0.2767,0.2767,0.3067,0.2833,0.1833,0.13,0.0667,0.05,0.0733,0.1733,0.21,0.21,0.18,0.16,0.16,0.2167,0.2567,0.3233,0.3,0.2,0.1633,0.18,0.18,0.18,0.18,0.1833,0.23,0.22,0.22,0.22,0.22,0.2033,0.2033,0.2033,0.2033,0.1633,0.1167,0.06,0.06,0.0767,0.1033,0.1033,0.1033,0.1033,0.1033,0.0833,0.0433,0.0433,0.0433,0.0267,0.0733,0.1,0.1,0.1,0.1,0.1,0.1167,0.1567,0.1767,0.1767,0.1033,0.0767,0.0767,0.0767,0.0767,0.0767,0.06,0.02,0.0,0.0,0.0,0.0967,0.16,0.16,0.16,0.16,0.16,0.16,0.1967,0.1967,0.1967,0.1,0.0367,0.0367,0.0367,0.0367,0.0367,0.04,0.0367,0.1267,0.1267,0.1267,0.14,0.14,0.14,0.14,0.14,0.1367,0.1333,0.0433,0.0433,0.0433,0.0333,0.0467,0.0467,0.06,0.0767,0.0767,0.0467,0.0467,0.0467,0.0467,0.08,0.0867,0.0867,0.0733,0.1367,0.1367,0.1367,0.1367,0.1367,0.1367,0.12,0.1,0.11,0.11,0.0667,0.08,0.08,0.08,0.11,0.11,0.09,0.09,0.08,0.08,0.0433,0.03,0.03,0.05,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0067,0.1067,0.2067,0.3067,0.35,0.35,0.35,0.3833,0.3833,0.4067,0.4,0.3,0.2067,0.1067,0.1267,0.1567,0.17,0.1367,0.1367,0.1133,0.1133,0.1133,0.1067,0.1067,0.0433,0.0133,0.0,0.0,0.0,0.0,0.0,0.0,0.0233,0.0233,0.1167,0.2167,0.3167,0.3667,0.3967,0.4967,0.5767,0.6574,0.7066,0.7991,0.7789,0.7396],"threshold":0.1},"quality":{"ball_coverage":0.3036,"ball_kept":0.9427,"has_ball":true,"has_3d":true,"tracker_ids_merged":138,"interpolated_frames":3660,"appearance_used":true,"swaps_fixed":[]}};
+
+// ---------------------------------------------------------------- helpers
+function h(tag, attrs, ...kids) {
+  const svgTags = ["svg", "g", "line", "rect", "circle", "path", "text", "polyline"];
+  const el = svgTags.includes(tag) ? document.createElementNS("http://www.w3.org/2000/svg", tag) : document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.setAttribute("class", v);
+    else if (k === "html") el.innerHTML = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(kid));
+  return el;
+}
+const has = v => v !== null && v !== undefined && !Number.isNaN(v);
+const num = (v, d = 0, unit = "") => has(v) ? v.toFixed(d) + unit : "–";
+const pct = v => has(v) ? Math.round(100 * v) + "%" : "–";
+const kmh = ms => has(ms) ? ms * 3.6 : null;
+function clock(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+function dur(s) { return s >= 90 ? (s / 60).toFixed(1) + " min" : Math.round(s) + " s"; }
+const teamOf = id => D.players.find(p => p.id === id)?.team;
+const isSecond = id => { const p = D.players.find(q => q.id === id); return p && D.players.filter(q => q.team === p.team).indexOf(p) === 1; };
+const dot = id => h("i", { class: "dot " + teamOf(id) + (isSecond(id) ? " ring" : "") });
+const who = id => h("span", { class: "who" }, dot(id), id);
+// The simplified CourtShot mark: a ball's arc, three points, and the ball (the only Volt element).
+function logo() {
+  const svg = h("svg", { viewBox: "0 0 100 100", role: "img", "aria-label": "CourtShot" });
+  svg.innerHTML = `<defs><linearGradient id="cs-tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c2c2e"/><stop offset="1" stop-color="#000"/></linearGradient></defs>
+    <rect x="1" y="1" width="98" height="98" rx="23" fill="url(#cs-tile)" stroke="rgba(255,255,255,.14)" stroke-width="1.5"/>
+    <path d="M24 80 C32 44 44 26 57 27 C64 28 70 38 75 55" fill="none" stroke="rgba(255,255,255,.34)" stroke-width="3.2" stroke-linecap="round"/>
+    <circle cx="43" cy="36" r="4" fill="#a1a1a6"/><circle cx="57" cy="27" r="4.6" fill="#e5e5ea"/><circle cx="68" cy="37" r="5.2" fill="#fff"/>
+    <circle cx="75" cy="56" r="9.5" fill="#d4f542"/>`;
+  return svg;
+}
+// A data mark in a team's colour and shape (T_1 round, T_2 square), filled or hollow.
+function mark(x, y, r, team, filled, ring = "var(--card)") {
+  const c = `var(--${team === "T_1" ? "t1" : "t2"})`, a = { fill: filled ? c : ring, stroke: filled ? ring : c, "stroke-width": filled ? 1.5 : 2 };
+  return team === "T_1" ? h("circle", { cx: x, cy: y, r, ...a }) : h("rect", { x: x - r * .9, y: y - r * .9, width: r * 1.8, height: r * 1.8, rx: r * .3, ...a });
+}
+const label = t => D.shot_labels[t] || t;
+
+const tip = document.getElementById("tip");
+function showTip(ev, html) {
+  tip.innerHTML = html; tip.classList.add("on");
+  const pad = 14, r = tip.getBoundingClientRect();
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - pad;
+  tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+}
+const hideTip = () => tip.classList.remove("on");
+const tipOn = (el, fn) => { el.addEventListener("mousemove", ev => showTip(ev, fn(ev))); el.addEventListener("mouseleave", hideTip); return el; };
+
+function card(cls, title, sub, ...kids) {
+  return h("div", { class: "card " + (cls || "") }, title && h("h2", {}, title), sub && h("p", { class: "sub" }, sub), kids);
+}
+function barList(rows, team) {
+  const max = Math.max(1, ...rows.map(r => r.value || 0));
+  return h("div", { class: "bl" }, rows.map(r => [
+    h("div", { class: "k" }, r.label),
+    h("div", { class: "track" }, h("i", { class: "fill " + team, style: `width:${100 * (r.value || 0) / max}%` })),
+    h("div", { class: "n" }, r.text ?? String(r.value), r.note && h("small", {}, r.note)),
+  ]));
+}
+function statList(rows) {
+  return h("div", { class: "sl" }, rows.filter(Boolean).map(([k, v, small]) => [h("div", { class: "k" }, k), h("div", { class: "n" }, v, small && h("small", {}, " " + small))]));
+}
+function shareRows(obj, order, names) {
+  const total = order.reduce((a, k) => a + (obj?.[k] || 0), 0);
+  return order.map(k => ({ label: names[k], value: obj?.[k] || 0, text: total ? Math.round(100 * (obj[k] || 0) / total) + "%" : "–", note: String(obj?.[k] || 0) }));
+}
+
+// ---------------------------------------------------------------- heatmap
+// One hue per team, from barely there to the busiest spot. Dark theme: deep -> bright -> near white.
+// Light theme the other way round: pale -> deep.
+const RAMPS = {
+  dark: { T_1: [[0, [92, 107, 0, 0]], [0.14, [100, 118, 4, 150]], [0.55, [212, 245, 66, 228]], [1, [251, 255, 224, 250]]],
+          T_2: [[0, [36, 72, 160, 0]], [0.14, [40, 84, 186, 160]], [0.55, [77, 141, 255, 230]], [1, [227, 236, 255, 250]]] },
+  light: { T_1: [[0, [212, 245, 66, 0]], [0.14, [205, 238, 60, 150]], [0.6, [147, 170, 20, 225]], [1, [92, 107, 0, 248]]],
+           T_2: [[0, [160, 196, 255, 0]], [0.14, [150, 190, 255, 160]], [0.6, [77, 141, 255, 228]], [1, [23, 70, 180, 248]]] },
+};
+function ramp(stops, t) {
+  t = Math.min(1, Math.max(0, t));
+  for (let i = 1; i < stops.length; i++) if (t <= stops[i][0]) {
+    const [a, ca] = stops[i - 1], [b, cb] = stops[i], k = (t - a) / (b - a);
+    return ca.map((v, j) => v + (cb[j] - v) * k);
+  }
+  return stops[stops.length - 1][1];
+}
+function blur(grid, sigma) {
+  const n = grid.length, m = grid[0].length, r = Math.ceil(3 * sigma), k = [];
+  for (let i = -r; i <= r; i++) k.push(Math.exp(-0.5 * (i / sigma) ** 2));
+  const ks = k.reduce((a, b) => a + b, 0);
+  const pass = (src, horiz) => src.map((row, y) => row.map((_, x) => {
+    let s = 0;
+    for (let i = -r; i <= r; i++) { const yy = horiz ? y : y + i, xx = horiz ? x + i : x; if (yy >= 0 && yy < n && xx >= 0 && xx < m) s += src[yy][xx] * k[i + r]; }
+    return s / ks;
+  }));
+  return pass(pass(grid, true), false);
+}
+function heatmap(player, opts = {}) {
+  redraws.length = Math.min(redraws.length, 64);
+  const box = h("div", { class: "heat" });
+  const canvas = h("canvas"); box.append(canvas, !opts.mini && h("span", { class: "tag net" }, "Net"), !opts.mini && h("span", { class: "tag back" }, "Back wall"));
+  const n = player.heat.length, smooth = blur(player.heat, n / 16);
+  const peak = Math.max(...smooth.flat());
+  const total = player.heat.flat().reduce((a, b) => a + b, 0);
+  function draw() {
+    const w = box.clientWidth || 300, dpr = Math.min(2, devicePixelRatio || 1);
+    canvas.width = canvas.height = Math.round(w * dpr);
+    const g = canvas.getContext("2d"), W = canvas.width, css = getComputedStyle(document.documentElement);
+    const stops = RAMPS[document.documentElement.dataset.theme === "light" ? "light" : "dark"][player.team];
+    // court: faint bands, like a mown pitch
+    for (let i = 0; i < 5; i++) { g.fillStyle = css.getPropertyValue(i % 2 ? "--court2" : "--court"); g.fillRect(0, i * W / 5, W, W / 5 + 1); }
+    if (peak > 0) {
+      const off = document.createElement("canvas"); off.width = off.height = n;
+      const og = off.getContext("2d"), img = og.createImageData(n, n);
+      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+        const c = ramp(stops, Math.pow(smooth[y][x] / peak, 0.8)), i = 4 * (y * n + x);
+        img.data[i] = c[0]; img.data[i + 1] = c[1]; img.data[i + 2] = c[2]; img.data[i + 3] = c[3];
+      }
+      og.putImageData(img, 0, 0);
+      g.imageSmoothingEnabled = true; g.imageSmoothingQuality = "high"; g.drawImage(off, 0, 0, W, W);
+    }
+    // lines: net (top), walls, service line, centre line from the net to the service line
+    g.strokeStyle = css.getPropertyValue("--court-line"); g.lineWidth = Math.max(1, W / 300);
+    const m = g.lineWidth, sy = D.settings.service_line / 10 * W;
+    g.strokeRect(m, m, W - 2 * m, W - 2 * m);
+    g.beginPath(); g.moveTo(m, sy); g.lineTo(W - m, sy); g.moveTo(W / 2, m); g.lineTo(W / 2, sy); g.stroke();
+    g.lineWidth = m * 3; g.beginPath(); g.moveTo(0, m * 1.5); g.lineTo(W, m * 1.5); g.stroke();
+  }
+  new ResizeObserver(draw).observe(box); redraws.push(draw);
+  if (!opts.mini) tipOn(box, ev => {
+    const r = box.getBoundingClientRect(), cx = Math.floor((ev.clientX - r.left) / r.width * n), cy = Math.floor((ev.clientY - r.top) / r.height * n);
+    const half = Math.round(n / 20);   // +- 0.5 m: a 1 m square around the pointer
+    let s = 0;
+    for (let y = cy - half; y < cy + half; y++) for (let x = cx - half; x < cx + half; x++) if (player.heat[y]?.[x]) s += player.heat[y][x];
+    const depth = (ev.clientY - r.top) / r.height * 10, lat = (ev.clientX - r.left) / r.width * 10;
+    return `<b>${total ? (100 * s / total).toFixed(1) : 0}% of rally time</b>within this 1 m square · ${depth.toFixed(1)} m from the net, ${lat < 5 ? "left" : "right"} side`;
+  });
+  return box;
+}
+const redraws = [];
+const heatScale = (...teams) => h("div", { class: "scales" }, teams.map(t => h("div", { class: "scale" },
+  teams.length > 1 && h("span", { class: "dot " + t }), "Less time", h("i", { class: t }), "More time")));
+
+// ---------------------------------------------------------------- overview
+function cmpRow(labelText, a, b, fmt, opts = {}) {
+  const fa = fmt(a), fb = fmt(b), max = Math.max(a || 0, b || 0, 1e-9);
+  const lead = !has(a) || !has(b) || a === b ? null : (a > b) !== !!opts.lowerLeads ? 0 : 1;
+  return h("div", { class: "cmp" },
+    h("div", { class: "vals" },
+      h("div", { class: "v T_1" + (lead === 0 ? " lead" : "") }, h("span", {}, fa)),
+      h("div", { class: "lab" }, labelText),
+      h("div", { class: "v r T_2" + (lead === 1 ? " lead" : "") }, h("span", {}, fb))),
+    h("div", { class: "bars" }, h("div", {}, h("i", { style: `width:${100 * (a || 0) / max}%` })), h("div", {}, h("i", { style: `width:${100 * (b || 0) / max}%` }))));
+}
+function overview() {
+  const page = document.getElementById("p-overview"), [A, B] = D.teams, m = D.match;
+  const mv = D.movement_rallies, inPlay = m ? m.time_in_play_s : mv.reduce((a, r) => a + r.duration_s, 0);
+  // Headline numbers are the ones the tracking is surest of; single-shot speeds are not among them.
+  const metres = D.players.reduce((a, p) => a + (p.move.distance_m || 0), 0);
+  const stat = (k, v, unit, sub, key) => h("div", { class: "stat" + (key ? " key" : "") }, h("div", { class: "k" }, k),
+    h("div", { class: "v" }, v, unit && h("small", {}, unit)), sub && h("div", { class: "s" }, sub));
+  const mins = inPlay >= 90;
+  page.append(h("div", { class: "card hero" },
+    h("div", { class: "hero-head" }, h("h2", {}, logo(), "Match summary"), h("span", { class: "chip" }, "Rallies from the " + D.settings.rally_source)),
+    h("div", { class: "stats" },
+      m ? stat("Longest rally", String(m.longest_rally_shots ?? "–"), "shots", dur(m.longest_rally_s || 0), true)
+        : stat("Rallies", String(mv.length), null, null, true),
+      stat("Time in play", mins ? (inPlay / 60).toFixed(1) : String(Math.round(inPlay)), mins ? "min" : "s", pct(inPlay / D.duration_s) + " of the video"),
+      m && stat("Rallies", String(m.rallies), null, num(m.avg_rally_shots, m.rallies > 1 ? 1 : 0) + " shots on average"),
+      stat("Distance covered", metres >= 1000 ? (metres / 1000).toFixed(1) : String(Math.round(metres)), metres >= 1000 ? "km" : "m", "all four players"),
+      m && stat("Shots", String(m.shots), null, "ball seen in " + pct(D.quality.ball_coverage) + " of frames"))));
+
+  const grid = h("div", { class: "grid" }); page.append(grid);
+  const sum = (t, f) => t.players.reduce((a, id) => a + (f(D.players.find(p => p.id === id)) || 0), 0);
+  const types = t => t.shots?.by_type || {};
+  const rows = [];
+  if (A.shots) rows.push(
+    cmpRow("Shots", A.shots.shots, B.shots.shots, v => num(v)),
+    cmpRow("Attacking shots", A.shots.attacking_share, B.shots.attacking_share, pct),
+    cmpRow("Average shot speed", A.shots.avg_speed_kmh, B.shots.avg_speed_kmh, v => num(v, 0, " km/h")),
+    cmpRow("Fastest shot", A.shots.max_speed_kmh, B.shots.max_speed_kmh, v => num(v, 0, " km/h")),
+    cmpRow("Overheads", (types(A).smash || 0) + (types(A).bandeja_vibora || 0), (types(B).smash || 0) + (types(B).bandeja_vibora || 0), v => num(v)),
+    cmpRow("Lobs", types(A).lob || 0, types(B).lob || 0, v => num(v)));
+  if (A.shots && (A.shots.winners + A.shots.errors + B.shots.winners + B.shots.errors) > 0) rows.push(
+    cmpRow("Winners", A.shots.winners, B.shots.winners, v => num(v)),
+    cmpRow("Errors", A.shots.errors, B.shots.errors, v => num(v), { lowerLeads: true }));
+  rows.push(
+    cmpRow("Both players at the net", A.move.both_at_net, B.move.both_at_net, pct),
+    cmpRow("Both players at the back", A.move.both_at_back, B.move.both_at_back, pct, { lowerLeads: true }),
+    cmpRow("Distance covered", sum(A, p => p.move.distance_m), sum(B, p => p.move.distance_m), v => num(v, 0, " m")),
+    cmpRow("Net regained", A.move.net_regained, B.move.net_regained, v => num(v)));
+  const head = t => h("span", { class: "who" }, h("i", { class: "dot " + t.id }), t.players.join(" · "));
+  grid.append(card("c6", "Team comparison", "Shots from the ball track; positions during rallies only.",
+    h("div", { class: "cmp-head" }, h("div", {}, head(A)), h("div", {}), h("div", {}, head(B))), rows));
+
+  if (A.shots) {
+    const order = D.shot_types.filter(t => (types(A)[t] || 0) + (types(B)[t] || 0) > 0);
+    const max = Math.max(1, ...order.map(t => Math.max(types(A)[t] || 0, types(B)[t] || 0)));
+    grid.append(card("c6", "Shot types", "How many of each shot the two teams played. Types are estimated by rules (see About the numbers).",
+      h("div", { class: "cmp-head" }, h("div", {}, head(A)), h("div", {}), h("div", {}, head(B))),
+      h("div", { class: "mir" }, order.map(t => [
+        h("div", { class: "n" }, String(types(A)[t] || 0)),
+        h("div", { class: "track l" }, h("i", { style: `width:${100 * (types(A)[t] || 0) / max}%` })),
+        h("div", { class: "lab" }, label(t)),
+        h("div", { class: "track r" }, h("i", { style: `width:${100 * (types(B)[t] || 0) / max}%` })),
+        h("div", { class: "n r" }, String(types(B)[t] || 0))]))));
+  }
+
+  grid.append(card("", "Where each player plays", "Share of rally time, seen from behind each player: their own half, net at the top. Select a player for the details.",
+    h("div", { class: "minis" }, D.players.map(p => h("button", { class: "mini", onclick: () => { state.player = p.id; go("players"); } },
+      h("div", { class: "name" }, dot(p.id), p.id, h("small", {}, pct(p.move.time_at_net) + " at net")), heatmap(p, { mini: true })))),
+    heatScale(...D.teams.map(t => t.id))));
+  grid.append(card("", "Match timeline", D.shots.length ? "Every shot, by player. Shaded bands are rallies." : "Shaded bands are rallies.", timeline()));
+}
+
+function timeline() {
+  const W = 1000, lane = 26, top = 8, left = 44, H = top + lane * 4 + 26, T = Math.max(1, D.duration_s);
+  const x = t => left + (t - D.t0) / T * (W - left - 8);
+  const svg = h("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Shots over time by player" });
+  const bands = D.rallies || D.movement_rallies;
+  for (const r of bands) svg.append(h("rect", { x: x(r.start_s), y: top, width: Math.max(1, x(r.end_s) - x(r.start_s)), height: lane * 4, fill: "var(--raise)", rx: 4 }));
+  D.players.forEach((p, i) => {
+    const y = top + lane * i + lane / 2;
+    svg.append(h("line", { x1: left, x2: W - 8, y1: y, y2: y, stroke: "var(--line)" }), h("text", { x: 0, y: y + 4, style: "fill:var(--text2);font-weight:600" }, p.id));
+  });
+  const step = T > 600 ? 120 : T > 240 ? 60 : T > 90 ? 30 : 10;
+  for (let t = 0; t <= T; t += step) svg.append(h("text", { x: x(D.t0 + t), y: H - 4, "text-anchor": "middle" }, clock(t)));
+  for (const s of D.shots) {
+    const i = D.players.findIndex(p => p.id === s.player), y = top + lane * i + lane / 2;
+    const g = h("g", { class: "shot" },
+      h("circle", { cx: x(s.time_s), cy: y, r: 11, fill: "transparent" }),
+      mark(x(s.time_s), y, s.attacking ? 5 : 4.2, s.team, s.attacking));
+    svg.append(tipOn(g, () => shotTip(s)));
+  }
+  return h("div", {}, svg, D.shots.length ? h("div", { class: "legend" },
+    D.teams.map(t => h("span", {}, h("i", { class: "dot " + t.id }), t.players.join(" · "))),
+    h("span", {}, "Filled: attacking shot (" + D.attacking_types.map(label).join(", ").toLowerCase() + ")"),
+    h("span", {}, "Hollow: other shot")) : null);
+}
+function shotTip(s) {
+  const bits = [has(s.speed_kmh) && Math.round(s.speed_kmh) + " km/h", has(s.contact_height_m) && "contact at " + s.contact_height_m.toFixed(1) + " m",
+    s.direction && ({ cross: "cross-court", line: "down the line", middle: "down the middle" })[s.direction], s.target && "to " + s.target].filter(Boolean);
+  return `<b>${s.player} · ${label(s.type)}</b>${clock(s.time_s - D.t0)}${bits.length ? " · " + bits.join(" · ") : ""}`;
+}
+
+// ---------------------------------------------------------------- players
+const state = { player: D.players[0].id, mapPlayer: "all", mapType: "all" };
+function players() {
+  const page = document.getElementById("p-players"); page.replaceChildren();
+  page.append(h("div", { class: "filters" }, h("div", { class: "seg", role: "group", "aria-label": "Player" }, D.players.map(p =>
+    h("button", { "aria-pressed": String(p.id === state.player), onclick: () => { state.player = p.id; players(); } }, dot(p.id), p.id)))));
+  const p = D.players.find(q => q.id === state.player), mv = p.move, sh = p.shots, team = p.team;
+  const mate = D.players.find(q => q.team === team && q.id !== p.id);
+  const grid = h("div", { class: "grid" }); page.append(grid);
+  grid.append(card("c5", "Heatmap", `Where ${p.id} stood during rallies: own half, net at the top, ${p.id}'s left on the left.`, heatmap(p), heatScale(team)));
+  grid.append(card("c7", "Movement", `${team}, with ${mate ? mate.id : "–"}. Tracked in ${pct(mv.tracked)} of frames.`,
+    statList([
+      ["Distance covered", num(mv.distance_m, 0, " m"), has(mv.distance_in_rallies_m) && `(${num(mv.distance_in_rallies_m, 0)} m in rallies)`],
+      ["Top speed", num(kmh(mv.top_speed_ms), 1, " km/h")],
+      ["Sprints", String(mv.sprints), `over ${num(kmh(D.settings.sprint_speed), 0)} km/h`],
+      ["Average distance from the net", num(mv.avg_dist_to_net_m, 1, " m")],
+      ["Court coverage", pct(mv.court_coverage), "of their half"],
+      ["Time on the left side", pct(mv.time_left_side)],
+    ]),
+    h("h2", { style: "margin-top:18px" }, "Time by zone"), h("p", { class: "sub" }, `Net: closer than ${D.settings.net_zone} m. Back: farther than ${D.settings.back_zone} m.`),
+    barList([{ label: "At the net", value: mv.time_at_net || 0, text: pct(mv.time_at_net) }, { label: "In the middle", value: mv.time_in_middle || 0, text: pct(mv.time_in_middle) },
+      { label: "At the back", value: mv.time_at_back || 0, text: pct(mv.time_at_back) }], team)));
+  if (!sh) { grid.append(card("", "Shots", null, h("p", { class: "empty" }, "No ball data in this run, so there are no shot statistics."))); return; }
+  grid.append(card("c4", "Shots", null, statList([
+    ["Shots", String(sh.shots)],
+    ["Attacking shots", pct(sh.attacking_share)],
+    ["Average speed", num(sh.avg_speed_kmh, 0, " km/h")],
+    ["Fastest", num(sh.max_speed_kmh, 0, " km/h")],
+    ["Average contact height", num(sh.avg_contact_height_m, 2, " m")],
+    ["Landing deep", pct(sh.deep_share), "past the service line"],
+    (sh.winners + sh.errors > 0) && ["Winners / errors", sh.winners + " / " + sh.errors],
+  ])));
+  const typeRows = D.shot_types.filter(t => sh.by_type[t] > 0).sort((a, b) => sh.by_type[b] - sh.by_type[a]).map(t => ({ label: label(t), value: sh.by_type[t] }));
+  grid.append(card("c4", "Shot types", "Estimated by rules.", typeRows.length ? barList(typeRows, team) : h("p", { class: "empty" }, "No shots found.")));
+  const opp = D.players.filter(q => q.team !== team);
+  grid.append(card("c4", "Direction and target", "Where the shots went, and which opponent played the next ball.",
+    barList(shareRows(sh.direction, ["cross", "middle", "line"], { cross: "Cross-court", middle: "Middle", line: "Down the line" }), team),
+    h("div", { style: "height:14px" }),
+    barList(shareRows(sh.targets, opp.map(q => q.id), Object.fromEntries(opp.map(q => [q.id, "To " + q.id]))), team),
+    h("div", { style: "height:14px" }),
+    barList(shareRows(sh.from_zone, ["net", "middle", "back"], { net: "Hit at the net", middle: "Hit mid-court", back: "Hit at the back" }), team)));
+}
+
+// ---------------------------------------------------------------- shots
+function shots() {
+  const page = document.getElementById("p-shots"); page.replaceChildren();
+  if (!D.shots.length) { page.append(h("div", { class: "grid" }, card("", "Shots", null, h("p", { class: "empty" }, "No shots were found in this run.")))); return; }
+  const typesHere = D.shot_types.filter(t => D.shots.some(s => s.type === t));
+  page.append(h("div", { class: "filters" },
+    h("div", { class: "seg", role: "group", "aria-label": "Player" }, [["all", "All players"], ...D.players.map(p => [p.id, p.id])].map(([id, text]) =>
+      h("button", { "aria-pressed": String(state.mapPlayer === id), onclick: () => { state.mapPlayer = id; shots(); } }, id !== "all" && dot(id), text))),
+    h("select", { "aria-label": "Shot type", onchange: ev => { state.mapType = ev.target.value; shots(); } },
+      h("option", { value: "all" }, "All shot types"), typesHere.map(t => h("option", { value: t, selected: state.mapType === t ? "" : null }, label(t))))));
+  const sel = D.shots.filter(s => (state.mapPlayer === "all" || s.player === state.mapPlayer) && (state.mapType === "all" || s.type === state.mapType));
+  const grid = h("div", { class: "grid" }); page.append(grid);
+  const drawn = sel.filter(s => s.contact && s.landing);
+  grid.append(card("c5", "Shot map", `${drawn.length} of ${sel.length} selected shots have a landing spot. Line: from the hitter to where the ball landed.`, shotMap(drawn),
+    h("div", { class: "legend" }, D.teams.map(t => h("span", {}, h("i", { class: "dot " + t.id }), t.players.join(" · "))), h("span", {}, "Mark: landing spot"))));
+  const speeds = sel.filter(s => has(s.speed_kmh)).sort((a, b) => b.speed_kmh - a.speed_kmh).slice(0, 8);
+  grid.append(card("c7", "Fastest shots", "Launch speed from the 3D fit where it is good, else the average speed to the landing spot.",
+    speeds.length ? h("div", { class: "bl" }, speeds.map(s => [
+      h("div", { class: "k" }, who(s.player), " " + label(s.type)),
+      h("div", { class: "track" }, h("i", { class: "fill " + s.team, style: `width:${100 * s.speed_kmh / speeds[0].speed_kmh}%` })),
+      h("div", { class: "n" }, Math.round(s.speed_kmh) + " km/h", h("small", {}, clock(s.time_s - D.t0)))])) : h("p", { class: "empty" }, "No speeds for this selection."),
+    h("h2", { style: "margin-top:20px" }, "Contact height"), h("p", { class: "sub" }, "How high the ball was when each shot was hit, by time. Above 1.75 m is over the head."),
+    heightStrip(sel)));
+  grid.append(card("", "All shots", `${sel.length} shots`, h("div", { class: "scroll" }, h("table", {},
+    h("thead", {}, h("tr", {}, ["#", "Time", "Player", "Type", "Speed", "Contact", "From", "Direction", "To", "Landing", "Seen"].map((c, i) => h("th", { class: i === 2 || i === 3 || i > 5 ? "l" : "" }, c)))),
+    h("tbody", {}, sel.map(s => h("tr", {},
+      h("td", {}, String(s.index + 1)), h("td", {}, clock(s.time_s - D.t0)), h("td", { class: "l" }, who(s.player)), h("td", { class: "l" }, label(s.type)),
+      h("td", {}, has(s.speed_kmh) ? Math.round(s.speed_kmh) + " km/h" : "–"), h("td", {}, num(s.contact_height_m, 1, " m")),
+      h("td", { class: "l" }, s.zone ? ({ net: "Net", middle: "Mid-court", back: "Back" })[s.zone] : "–"),
+      h("td", { class: "l" }, s.direction ? ({ cross: "Cross-court", line: "Down the line", middle: "Middle" })[s.direction] : "–"),
+      h("td", { class: "l" }, s.target ? who(s.target) : "–"),
+      h("td", { class: "l" }, s.landing ? `${s.landing[0].toFixed(1)}, ${s.landing[1].toFixed(1)}` : "–"),
+      h("td", { class: "l" }, ({ high: "Well", medium: "Partly", low: "Poorly" })[s.confidence] || "–"))))))));
+}
+function shotMap(list) {
+  // Court drawn upright: T_1's end (near the camera, y = 0) at the bottom.
+  const S = 30, W = 10 * S, H = 20 * S, pad = 8, X = x => pad + x * S, Y = y => pad + (20 - y) * S, sv = D.settings.service_line;
+  const svg = h("svg", { viewBox: `0 0 ${W + 2 * pad} ${H + 2 * pad}`, role: "img", "aria-label": "Shot map", style: "max-height:640px" });
+  svg.append(h("rect", { class: "court-bg", x: pad, y: pad, width: W, height: H, rx: 10 }), h("rect", { class: "court-ln", x: pad, y: pad, width: W, height: H, rx: 10, "stroke-width": 1.5 }));
+  for (const y of [10 - sv, 10 + sv]) svg.append(h("line", { class: "court-ln", x1: X(0), x2: X(10), y1: Y(y), y2: Y(y), "stroke-width": 1.5 }));
+  svg.append(h("line", { class: "court-ln", x1: X(5), x2: X(5), y1: Y(10 - sv), y2: Y(10 + sv), "stroke-width": 1.5 }), h("line", { class: "court-ln", x1: X(0), x2: X(10), y1: Y(10), y2: Y(10), "stroke-width": 3 }));
+  svg.append(h("text", { x: X(10) - 6, y: Y(10) - 7, "text-anchor": "end", style: "fill:var(--court-text);font-weight:500" }, "Net"));
+  for (const s of list) {
+    const c = `var(--${s.team === "T_1" ? "t1" : "t2"})`, [x1, y1] = s.contact, [x2, y2] = s.landing;
+    const g = h("g", { class: "shot" },
+      h("line", { x1: X(x1), y1: Y(y1), x2: X(x2), y2: Y(y2), stroke: "transparent", "stroke-width": 12 }),
+      h("line", { x1: X(x1), y1: Y(y1), x2: X(x2), y2: Y(y2), stroke: "var(--court)", "stroke-width": 4.5, "stroke-linecap": "round" }),
+      h("line", { x1: X(x1), y1: Y(y1), x2: X(x2), y2: Y(y2), stroke: c, "stroke-width": 2, "stroke-linecap": "round", opacity: .85 }),
+      mark(X(x2), Y(y2), 5.5, s.team, true, "var(--court)"));
+    g.addEventListener("mouseenter", () => { svg.querySelectorAll(".shot").forEach(o => o.style.opacity = o === g ? 1 : .18); });
+    g.addEventListener("mouseleave", () => { svg.querySelectorAll(".shot").forEach(o => o.style.opacity = 1); });
+    svg.append(tipOn(g, () => shotTip(s)));
+  }
+  return svg;
+}
+function heightStrip(list) {
+  const W = 640, H = 150, L = 34, B = 20, T = Math.max(1, D.duration_s), top = 3.2;
+  const x = t => L + (t - D.t0) / T * (W - L - 6), y = v => 6 + (1 - Math.min(v, top) / top) * (H - B - 6);
+  const svg = h("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Contact height of each shot over time" });
+  for (const v of [0, 1, 2, 3]) svg.append(h("line", { x1: L, x2: W - 6, y1: y(v), y2: y(v), stroke: "var(--line)" }), h("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, v + " m"));
+  svg.append(h("line", { x1: L, x2: W - 6, y1: y(1.75), y2: y(1.75), stroke: "var(--muted)", "stroke-width": 1 }), h("text", { x: W - 6, y: y(1.75) - 5, "text-anchor": "end", style: "paint-order:stroke;stroke:var(--card);stroke-width:5px;stroke-linejoin:round" }, "head height"));
+  for (const s of list) if (has(s.contact_height_m)) {
+    svg.append(tipOn(h("g", { class: "shot" }, h("circle", { cx: x(s.time_s), cy: y(s.contact_height_m), r: 10, fill: "transparent" }),
+      mark(x(s.time_s), y(s.contact_height_m), 4.5, s.team, true)), () => shotTip(s)));
+  }
+  return svg;
+}
+
+// ---------------------------------------------------------------- rallies
+function rallies() {
+  const page = document.getElementById("p-rallies"), list = D.rallies;
+  const names = { winner: "Winner", error: "Error", cut: "Video ends mid-rally", unknown: "Not clear" };
+  const grid = h("div", { class: "grid" }); page.append(grid);
+  if (list) {
+    const known = list.filter(r => r.outcome === "winner" || r.outcome === "error").length;
+    grid.append(card("", "Rallies", `From the ball track. How a rally ended is read from the last shot's fitted flight: an estimate, clear for ${known} of ${list.length}.`,
+      h("div", { class: "scroll" }, h("table", {},
+        h("thead", {}, h("tr", {}, ["#", "Start", "Length", "Shots", "Last shot by", "Last shot", "Ended with"].map((c, i) => h("th", { class: i > 3 ? "l" : "" }, c)))),
+        h("tbody", {}, list.map(r => h("tr", {}, h("td", {}, String(r.rally + 1)), h("td", {}, clock(r.start_s - D.t0)), h("td", {}, dur(r.duration_s)), h("td", {}, String(r.shots)),
+          h("td", { class: "l" }, r.last_player ? who(r.last_player) : "–"), h("td", { class: "l" }, r.last_type ? label(r.last_type) : "–"), h("td", { class: "l" }, names[r.outcome] || "–"))))))));
+  }
+  const mv = D.movement_rallies;
+  // With ball rallies in use, these are the same rallies again: only show them when movement decided.
+  if (!list || D.settings.rally_source === "movement") grid.append(card("", list ? "Rallies used for the position statistics" : "Rallies", "Found from how the players move (someone keeps making fast moves), because the ball was not seen often enough to mark them.",
+    mv.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["#", "Start", "End", "Length"].map(c => h("th", {}, c)))),
+      h("tbody", {}, mv.map((r, i) => h("tr", {}, h("td", {}, String(i + 1)), h("td", {}, clock(r.start_s - D.t0)), h("td", {}, clock(r.end_s - D.t0)), h("td", {}, dur(r.duration_s))))))) : h("p", { class: "empty" }, "None found.")));
+}
+
+// ---------------------------------------------------------------- about
+function about() {
+  const q = D.quality, page = document.getElementById("p-about");
+  const swaps = q.swaps_fixed.length ? `${q.swaps_fixed.length} identity swap(s) were corrected (at ${q.swaps_fixed.map(s => clock(s.time_s - D.t0)).join(", ")}).` : "no identity swaps were found.";
+  page.append(h("div", { class: "grid" },
+    card("c6", "Data quality", "Check these first: everything else is only as good as the tracking.", statList([
+      ["Frames with the ball detected", pct(q.ball_coverage)],
+      ["Ball detections kept after cleaning", pct(q.ball_kept)],
+      ["3D ball flights", q.has_3d ? "fitted" : "not used"],
+      ...D.players.map(p => [p.id + " tracked", pct(p.move.tracked), `(${pct(p.move.interpolated)} filled in)`]),
+    ])),
+    card("c6", "Player identities", null, h("p", { class: "note" },
+      `The four players are followed by position and motion; ${q.tracker_ids_merged} raw tracker IDs were merged into them and ${q.interpolated_frames} frames filled in across short gaps. ` +
+      (q.appearance_used ? `The result was checked against what the players look like: ${swaps} Players in the same kit can't be told apart this way.` : "Player looks were not checked (no appearance data next to the cache)."))),
+    card("", "How the numbers are made", null, h("div", { html: `
+      <dl>
+        <dt>Positions</dt><dd>Each player's feet mapped through the court calibration (accuracy roughly 0.2–0.4 m). Distance and speed come from smoothed positions; standing still (under ${D.settings.still_speed} m/s) adds no distance. Position statistics count rally time only.</dd>
+        <dt>Heatmaps</dt><dd>Share of rally time in each spot of the player's own half, flipped so the net is at the top whichever end they play from. Colour runs from little time (green) to most time (red), relative to that player's own busiest spot.</dd>
+        <dt>Rallies</dt><dd>From the ball track (first shot to last ball movement) when the ball is seen often enough, otherwise from player movement.</dd>
+        <dt>Shots</dt><dd>A shot is a change in the ball's path within a player's reach. Missed ball detections mean missed shots.</dd>
+        <dt>Shot types</dt><dd>Decided by rules, not a trained model: contact above the head is a smash when fast and a bandeja / víbora otherwise (the two are not told apart); a ball that goes high, or that the opponents answer with an overhead, is a lob; taken before the bounce near the net is a volley; hard and high off the back wall is a bajada; soft and short from the back is a chiquita; other shots after the bounce are drives. Expect mistakes, mostly between neighbouring types.</dd>
+        <dt>Speed</dt><dd>The launch speed of the fitted 3D flight when that fit is good, otherwise the average speed from the hitter to the landing spot (which reads lower).</dd>
+        <dt>Contact height</dt><dd>Where the ball is within the hitter's outline in the image, scaled to a 1.75 m player.</dd>
+        <dt>Direction and target</dt><dd>From where the hitter stood to where the ball landed (or to the opponent who played it next). Middle = within 1.25 m of the centre line.</dd>
+        <dt>Winners and errors</dt><dd>An estimate from the last shot of each rally. They need whole points on video: a clip that starts or stops mid-rally has none.</dd>
+      </dl>` }))));
+}
+
+// ---------------------------------------------------------------- shell
+const TABS = [["overview", "Overview"], ["players", "Players"], ["shots", "Shots"], ["rallies", "Rallies"], ["about", "About the numbers"]];
+function go(id, push = true) {
+  if (!TABS.some(t => t[0] === id)) id = "overview";
+  for (const [k] of TABS) {
+    document.getElementById("p-" + k).classList.toggle("on", k === id);
+    document.getElementById("tab-" + k).setAttribute("aria-selected", String(k === id));
+  }
+  if (id === "players") players();
+  if (id === "shots") shots();
+  if (push) history.replaceState(null, "", "#" + id);
+  scrollTo({ top: 0 });
+}
+function init() {
+  document.title = D.title + " · CourtShot match report";
+  document.getElementById("lockup").append(logo(), "CourtShot");
+  document.getElementById("title").textContent = D.title;
+  const m = D.match;
+  document.getElementById("meta").append(...[dur(D.duration_s) + " analysed", m ? m.rallies + (m.rallies === 1 ? " rally" : " rallies") : null, m ? m.shots + " shots" : null]
+    .filter(Boolean).map(t => h("span", {}, t)));
+  document.getElementById("sides").append(...D.teams.map(t => h("div", { class: "side" }, h("i", { class: "dot " + t.id }), t.players.join(" · "), h("small", {}, t.id))));
+  const tabs = document.getElementById("tabs");
+  tabs.append(...TABS.map(([id, text]) => h("button", { id: "tab-" + id, role: "tab", onclick: () => go(id) }, text)), h("span", { class: "spacer" }),
+    h("button", { class: "theme", onclick: toggleTheme, title: "Switch between the dark and the light version" }, "Appearance"));
+  const forced = new URLSearchParams(location.search).get("theme");
+  if (forced === "dark" || forced === "light") document.documentElement.dataset.theme = forced;
+  overview(); rallies(); about();
+  go(location.hash.slice(1) || "overview", false);
+}
+function toggleTheme() {
+  const root = document.documentElement;
+  root.dataset.theme = root.dataset.theme === "light" ? "dark" : "light";
+  redraws.forEach(f => f());   // canvases read their colours from the theme
+}
+if (D) init(); else document.getElementById("title").textContent = "No data: this is the report template. Run `python -m courtshot report`.";
+</script>
+</body>
+</html>

@@ -1,0 +1,763 @@
+{
+  "fps": 60.0,
+  "duration_s": 422.8,
+  "rallies": [
+    {
+      "start_s": 0.0333,
+      "end_s": 4.2,
+      "duration_s": 4.1833
+    },
+    {
+      "start_s": 17.8,
+      "end_s": 22.3833,
+      "duration_s": 4.6
+    },
+    {
+      "start_s": 29.8333,
+      "end_s": 34.55,
+      "duration_s": 4.7333
+    },
+    {
+      "start_s": 38.3,
+      "end_s": 50.3833,
+      "duration_s": 12.1
+    },
+    {
+      "start_s": 53.5333,
+      "end_s": 93.5833,
+      "duration_s": 40.0667
+    },
+    {
+      "start_s": 101.9333,
+      "end_s": 117.1333,
+      "duration_s": 15.2167
+    },
+    {
+      "start_s": 122.9833,
+      "end_s": 166.5333,
+      "duration_s": 43.5667
+    },
+    {
+      "start_s": 175.6667,
+      "end_s": 205.0833,
+      "duration_s": 29.4333
+    },
+    {
+      "start_s": 208.1667,
+      "end_s": 218.05,
+      "duration_s": 9.9
+    },
+    {
+      "start_s": 221.5667,
+      "end_s": 249.8833,
+      "duration_s": 28.3333
+    },
+    {
+      "start_s": 252.4667,
+      "end_s": 266.9833,
+      "duration_s": 14.5333
+    },
+    {
+      "start_s": 272.15,
+      "end_s": 285.3667,
+      "duration_s": 13.2333
+    },
+    {
+      "start_s": 291.0,
+      "end_s": 296.2,
+      "duration_s": 5.2167
+    },
+    {
+      "start_s": 308.3167,
+      "end_s": 333.95,
+      "duration_s": 25.65
+    },
+    {
+      "start_s": 336.6667,
+      "end_s": 341.55,
+      "duration_s": 4.9
+    },
+    {
+      "start_s": 347.05,
+      "end_s": 352.0333,
+      "duration_s": 5.0
+    },
+    {
+      "start_s": 355.85,
+      "end_s": 360.7,
+      "duration_s": 4.8667
+    },
+    {
+      "start_s": 369.3,
+      "end_s": 377.35,
+      "duration_s": 8.0667
+    },
+    {
+      "start_s": 400.5,
+      "end_s": 411.6833,
+      "duration_s": 11.2
+    },
+    {
+      "start_s": 416.95,
+      "end_s": 422.8333,
+      "duration_s": 5.9
+    }
+  ],
+  "players": {
+    "P_1": {
+      "team": "T_1",
+      "tracked": 0.8426,
+      "interpolated": 0.013,
+      "distance_m": 281.755,
+      "distance_in_rallies_m": 214.73,
+      "top_speed_ms": 8.2626,
+      "sprints": 3,
+      "avg_dist_to_net_m": 5.482,
+      "time_at_net": 0.3012,
+      "time_in_middle": 0.3642,
+      "time_at_back": 0.3347,
+      "court_coverage": 0.51,
+      "time_left_side": 0.8581
+    },
+    "P_2": {
+      "team": "T_1",
+      "tracked": 0.7809,
+      "interpolated": 0.0324,
+      "distance_m": 289.7714,
+      "distance_in_rallies_m": 237.5439,
+      "top_speed_ms": 9.6422,
+      "sprints": 3,
+      "avg_dist_to_net_m": 6.0407,
+      "time_at_net": 0.2174,
+      "time_in_middle": 0.275,
+      "time_at_back": 0.5075,
+      "court_coverage": 0.46,
+      "time_left_side": 0.0688
+    },
+    "P_3": {
+      "team": "T_2",
+      "tracked": 0.9076,
+      "interpolated": 0.0635,
+      "distance_m": 343.8034,
+      "distance_in_rallies_m": 299.5449,
+      "top_speed_ms": 9.0456,
+      "sprints": 17,
+      "avg_dist_to_net_m": 5.382,
+      "time_at_net": 0.3697,
+      "time_in_middle": 0.2623,
+      "time_at_back": 0.368,
+      "court_coverage": 0.62,
+      "time_left_side": 0.87
+    },
+    "P_4": {
+      "team": "T_2",
+      "tracked": 0.7922,
+      "interpolated": 0.0637,
+      "distance_m": 287.4039,
+      "distance_in_rallies_m": 257.1055,
+      "top_speed_ms": 9.0937,
+      "sprints": 9,
+      "avg_dist_to_net_m": 5.3314,
+      "time_at_net": 0.3504,
+      "time_in_middle": 0.3503,
+      "time_at_back": 0.2993,
+      "court_coverage": 0.48,
+      "time_left_side": 0.0628
+    }
+  },
+  "teams": {
+    "T_1": {
+      "players": [
+        "P_1",
+        "P_2"
+      ],
+      "both_at_net": 0.0371,
+      "both_at_back": 0.1673,
+      "split": 0.2767,
+      "in_transition": 0.5189,
+      "avg_partner_distance_m": 4.9629,
+      "side_by_side": 0.4052,
+      "depth_sync": -0.0796,
+      "net_lost": 1,
+      "net_regained": 2,
+      "median_time_to_regain_s": 10.95
+    },
+    "T_2": {
+      "players": [
+        "P_3",
+        "P_4"
+      ],
+      "both_at_net": 0.1464,
+      "both_at_back": 0.0889,
+      "split": 0.2131,
+      "in_transition": 0.5515,
+      "avg_partner_distance_m": 4.6946,
+      "side_by_side": 0.4843,
+      "depth_sync": 0.1464,
+      "net_lost": 5,
+      "net_regained": 1,
+      "median_time_to_regain_s": 19.0167
+    }
+  },
+  "ball": {
+    "coverage": 0.3036,
+    "kept": 0.9427,
+    "shots": 82,
+    "rallies": [
+      {
+        "start_s": 0.5667,
+        "end_s": 11.4667,
+        "hits": 2
+      },
+      {
+        "start_s": 19.5833,
+        "end_s": 28.8,
+        "hits": 0
+      },
+      {
+        "start_s": 34.1833,
+        "end_s": 68.0167,
+        "hits": 12
+      },
+      {
+        "start_s": 74.8167,
+        "end_s": 82.1167,
+        "hits": 3
+      },
+      {
+        "start_s": 87.4667,
+        "end_s": 97.4833,
+        "hits": 5
+      },
+      {
+        "start_s": 103.4833,
+        "end_s": 144.3167,
+        "hits": 9
+      },
+      {
+        "start_s": 156.4,
+        "end_s": 160.8833,
+        "hits": 2
+      },
+      {
+        "start_s": 169.3667,
+        "end_s": 218.5167,
+        "hits": 14
+      },
+      {
+        "start_s": 223.1667,
+        "end_s": 241.3,
+        "hits": 4
+      },
+      {
+        "start_s": 245.8833,
+        "end_s": 247.5667,
+        "hits": 2
+      },
+      {
+        "start_s": 256.5333,
+        "end_s": 263.2167,
+        "hits": 3
+      },
+      {
+        "start_s": 268.6833,
+        "end_s": 306.5167,
+        "hits": 10
+      },
+      {
+        "start_s": 315.4833,
+        "end_s": 319.4833,
+        "hits": 3
+      },
+      {
+        "start_s": 324.5333,
+        "end_s": 330.3167,
+        "hits": 2
+      },
+      {
+        "start_s": 335.0,
+        "end_s": 376.15,
+        "hits": 7
+      },
+      {
+        "start_s": 382.3167,
+        "end_s": 382.4167,
+        "hits": 1
+      },
+      {
+        "start_s": 402.8333,
+        "end_s": 414.4333,
+        "hits": 3
+      },
+      {
+        "start_s": 419.2667,
+        "end_s": 422.7833,
+        "hits": 0
+      }
+    ],
+    "players": {
+      "P_1": {
+        "shots": 26,
+        "volleys": 0,
+        "volley_share": 0.0,
+        "landed": 6,
+        "deep_share": 0.1667,
+        "median_flight_s": 3.0458,
+        "median_speed_ms": 4.861
+      },
+      "P_2": {
+        "shots": 21,
+        "volleys": 2,
+        "volley_share": 0.2,
+        "landed": 5,
+        "deep_share": 0.2,
+        "median_flight_s": 1.9125,
+        "median_speed_ms": 3.1689
+      },
+      "P_3": {
+        "shots": 28,
+        "volleys": 0,
+        "volley_share": 0.0,
+        "landed": 8,
+        "deep_share": 0.0,
+        "median_flight_s": 0.9104,
+        "median_speed_ms": 13.6258
+      },
+      "P_4": {
+        "shots": 7,
+        "volleys": 0,
+        "volley_share": 0.0,
+        "landed": 0,
+        "deep_share": null,
+        "median_flight_s": null,
+        "median_speed_ms": null
+      }
+    },
+    "teams": {
+      "T_1": {
+        "shots": 47,
+        "volleys": 2,
+        "volley_share": 0.1111,
+        "landed": 11,
+        "deep_share": 0.1818,
+        "median_flight_s": 1.9125,
+        "median_speed_ms": 3.1689
+      },
+      "T_2": {
+        "shots": 35,
+        "volleys": 0,
+        "volley_share": 0.0,
+        "landed": 8,
+        "deep_share": 0.0,
+        "median_flight_s": 0.9104,
+        "median_speed_ms": 13.6258
+      }
+    }
+  },
+  "stats": {
+    "match": {
+      "rallies": 18,
+      "shots": 82,
+      "avg_rally_shots": 5.12,
+      "avg_rally_s": 16.46,
+      "longest_rally_shots": 14,
+      "longest_rally_s": 49.1,
+      "time_in_play_s": 296.2
+    },
+    "rallies": [
+      {
+        "rally": 0,
+        "start_s": 0.5667,
+        "end_s": 11.4667,
+        "duration_s": 10.9,
+        "shots": 2,
+        "last_player": "P_2",
+        "last_type": "drive",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 1,
+        "start_s": 19.5833,
+        "end_s": 28.8,
+        "duration_s": 9.2167,
+        "shots": 0,
+        "last_player": null,
+        "last_type": null,
+        "outcome": "unknown"
+      },
+      {
+        "rally": 2,
+        "start_s": 34.1833,
+        "end_s": 68.0167,
+        "duration_s": 33.8333,
+        "shots": 12,
+        "last_player": "P_1",
+        "last_type": "drive",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 3,
+        "start_s": 74.8167,
+        "end_s": 82.1167,
+        "duration_s": 7.3,
+        "shots": 3,
+        "last_player": "P_2",
+        "last_type": "bandeja_vibora",
+        "outcome": "error"
+      },
+      {
+        "rally": 4,
+        "start_s": 87.4667,
+        "end_s": 97.4833,
+        "duration_s": 10.0167,
+        "shots": 5,
+        "last_player": "P_4",
+        "last_type": "drive",
+        "outcome": "error"
+      },
+      {
+        "rally": 5,
+        "start_s": 103.4833,
+        "end_s": 144.3167,
+        "duration_s": 40.8333,
+        "shots": 9,
+        "last_player": "P_3",
+        "last_type": "drive",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 6,
+        "start_s": 156.4,
+        "end_s": 160.8833,
+        "duration_s": 4.4833,
+        "shots": 2,
+        "last_player": "P_1",
+        "last_type": "volley",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 7,
+        "start_s": 169.3667,
+        "end_s": 218.5167,
+        "duration_s": 49.15,
+        "shots": 14,
+        "last_player": "P_3",
+        "last_type": "drive",
+        "outcome": "winner"
+      },
+      {
+        "rally": 8,
+        "start_s": 223.1667,
+        "end_s": 241.3,
+        "duration_s": 18.1333,
+        "shots": 4,
+        "last_player": "P_1",
+        "last_type": "drive",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 9,
+        "start_s": 245.8833,
+        "end_s": 247.5667,
+        "duration_s": 1.6833,
+        "shots": 2,
+        "last_player": "P_1",
+        "last_type": "drive",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 10,
+        "start_s": 256.5333,
+        "end_s": 263.2167,
+        "duration_s": 6.6833,
+        "shots": 3,
+        "last_player": "P_3",
+        "last_type": "volley",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 11,
+        "start_s": 268.6833,
+        "end_s": 306.5167,
+        "duration_s": 37.8333,
+        "shots": 10,
+        "last_player": "P_1",
+        "last_type": "drive",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 12,
+        "start_s": 315.4833,
+        "end_s": 319.4833,
+        "duration_s": 4.0,
+        "shots": 3,
+        "last_player": "P_2",
+        "last_type": "drive",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 13,
+        "start_s": 324.5333,
+        "end_s": 330.3167,
+        "duration_s": 5.7833,
+        "shots": 2,
+        "last_player": "P_2",
+        "last_type": "drive",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 14,
+        "start_s": 335.0,
+        "end_s": 376.15,
+        "duration_s": 41.15,
+        "shots": 7,
+        "last_player": "P_2",
+        "last_type": "lob",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 15,
+        "start_s": 382.3167,
+        "end_s": 382.4167,
+        "duration_s": 0.1,
+        "shots": 1,
+        "last_player": "P_1",
+        "last_type": "other",
+        "outcome": "unknown"
+      },
+      {
+        "rally": 16,
+        "start_s": 402.8333,
+        "end_s": 414.4333,
+        "duration_s": 11.6,
+        "shots": 3,
+        "last_player": "P_1",
+        "last_type": "bandeja_vibora",
+        "outcome": "winner"
+      },
+      {
+        "rally": 17,
+        "start_s": 419.2667,
+        "end_s": 422.7833,
+        "duration_s": 3.5167,
+        "shots": 0,
+        "last_player": null,
+        "last_type": null,
+        "outcome": "unknown"
+      }
+    ],
+    "players": {
+      "P_1": {
+        "shots": 26,
+        "by_type": {
+          "serve": 1,
+          "drive": 11,
+          "lob": 2,
+          "volley": 2,
+          "bandeja_vibora": 5,
+          "smash": 0,
+          "bajada": 0,
+          "chiquita": 0,
+          "other": 5
+        },
+        "attacking_share": 0.269,
+        "avg_speed_kmh": 41.29,
+        "max_speed_kmh": 118.9,
+        "avg_contact_height_m": 1.31,
+        "direction": {
+          "cross": 5,
+          "middle": 3,
+          "line": 5
+        },
+        "from_zone": {
+          "net": 11,
+          "middle": 5,
+          "back": 10
+        },
+        "deep_share": 0.125,
+        "targets": {
+          "P_3": 6,
+          "P_4": 3
+        },
+        "winners": 1,
+        "errors": 0
+      },
+      "P_2": {
+        "shots": 21,
+        "by_type": {
+          "serve": 0,
+          "drive": 9,
+          "lob": 4,
+          "volley": 1,
+          "bandeja_vibora": 3,
+          "smash": 1,
+          "bajada": 0,
+          "chiquita": 0,
+          "other": 3
+        },
+        "attacking_share": 0.238,
+        "avg_speed_kmh": 43.8,
+        "max_speed_kmh": 125.5,
+        "avg_contact_height_m": 1.37,
+        "direction": {
+          "cross": 2,
+          "middle": 8,
+          "line": 1
+        },
+        "from_zone": {
+          "net": 5,
+          "middle": 5,
+          "back": 11
+        },
+        "deep_share": 0.2,
+        "targets": {
+          "P_3": 6,
+          "P_4": 1
+        },
+        "winners": 0,
+        "errors": 1
+      },
+      "P_3": {
+        "shots": 28,
+        "by_type": {
+          "serve": 1,
+          "drive": 13,
+          "lob": 2,
+          "volley": 3,
+          "bandeja_vibora": 3,
+          "smash": 0,
+          "bajada": 1,
+          "chiquita": 1,
+          "other": 4
+        },
+        "attacking_share": 0.25,
+        "avg_speed_kmh": 54.62,
+        "max_speed_kmh": 82.8,
+        "avg_contact_height_m": 1.17,
+        "direction": {
+          "cross": 9,
+          "middle": 4,
+          "line": 7
+        },
+        "from_zone": {
+          "net": 9,
+          "middle": 6,
+          "back": 13
+        },
+        "deep_share": 0.1,
+        "targets": {
+          "P_2": 11,
+          "P_1": 4
+        },
+        "winners": 1,
+        "errors": 0
+      },
+      "P_4": {
+        "shots": 7,
+        "by_type": {
+          "serve": 0,
+          "drive": 4,
+          "lob": 0,
+          "volley": 0,
+          "bandeja_vibora": 0,
+          "smash": 1,
+          "bajada": 0,
+          "chiquita": 0,
+          "other": 2
+        },
+        "attacking_share": 0.143,
+        "avg_speed_kmh": 45.28,
+        "max_speed_kmh": 89.2,
+        "avg_contact_height_m": 1.0,
+        "direction": {
+          "cross": 0,
+          "middle": 1,
+          "line": 3
+        },
+        "from_zone": {
+          "net": 1,
+          "middle": 2,
+          "back": 4
+        },
+        "deep_share": 0.0,
+        "targets": {
+          "P_1": 4
+        },
+        "winners": 0,
+        "errors": 1
+      }
+    },
+    "teams": {
+      "T_1": {
+        "shots": 47,
+        "by_type": {
+          "serve": 1,
+          "drive": 20,
+          "lob": 6,
+          "volley": 3,
+          "bandeja_vibora": 8,
+          "smash": 1,
+          "bajada": 0,
+          "chiquita": 0,
+          "other": 8
+        },
+        "attacking_share": 0.255,
+        "avg_speed_kmh": 42.35,
+        "max_speed_kmh": 125.5,
+        "avg_contact_height_m": 1.34,
+        "direction": {
+          "cross": 7,
+          "middle": 11,
+          "line": 6
+        },
+        "from_zone": {
+          "net": 16,
+          "middle": 10,
+          "back": 21
+        },
+        "deep_share": 0.154,
+        "targets": {
+          "P_3": 12,
+          "P_4": 4
+        },
+        "winners": 1,
+        "errors": 1
+      },
+      "T_2": {
+        "shots": 35,
+        "by_type": {
+          "serve": 1,
+          "drive": 17,
+          "lob": 2,
+          "volley": 3,
+          "bandeja_vibora": 3,
+          "smash": 1,
+          "bajada": 1,
+          "chiquita": 1,
+          "other": 6
+        },
+        "attacking_share": 0.229,
+        "avg_speed_kmh": 52.59,
+        "max_speed_kmh": 89.2,
+        "avg_contact_height_m": 1.13,
+        "direction": {
+          "cross": 9,
+          "middle": 5,
+          "line": 10
+        },
+        "from_zone": {
+          "net": 10,
+          "middle": 8,
+          "back": 17
+        },
+        "deep_share": 0.091,
+        "targets": {
+          "P_2": 11,
+          "P_1": 8
+        },
+        "winners": 1,
+        "errors": 1
+      }
+    }
+  }
+}
